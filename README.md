@@ -1,20 +1,23 @@
-# Dahua Doorbell Integration
+# Asterisk Doorbell Integration
 ### Developed for the VTO2202 Video Doorbells
 
-This is based on TECH7Fox's excellent [Asterisk Integration](https://github.com/TECH7Fox/Asterisk-integration), but designed specifically to integrate Dahua VTO doorbells. Similar Asterisk-compatible doorbells should work, but are untested.
+This was inspired by TECH7Fox's excellent [Asterisk Integration](https://github.com/TECH7Fox/Asterisk-integration), but designed specifically to integrate Dahua VTO doorbells. Similar Asterisk-compatible doorbells should work, but are untested.
 
 ### How It's Different
-* The Asterisk WebRTC connection remains open while HA is active
-* Designed specifically for the flow of receiving a call, receiving a notifciation and then answering the call
+* The Asterisk WebRTC connection remains open while HA is active, which allows you to answer incoming calls quicker
+* Designed specifically for the flow of receiving a call, receiving a notification and then answering the call
 
 Included in this integration is a Lovelace card to answer and hang up calls.
 
+<img src="images/integration-details.svg" />
+
+
 ## Goals
-The primary goal is to create a relatively simple way to replace a Dahua VTH station and to receive doorbell calls directly in Home Assistant with minimal configuration.
+The primary goal is to create a relatively simple way to replace a Asterisk VTH station and to receive doorbell calls directly in Home Assistant with minimal configuration.
 
 ## Roadmap
 1. Tie PJSIP extensions to the browser_mod device IDs instead of creating unnecessary persons in HA.
-1. Create a new SIP card designed specifically for video doorbells, specifically the Dahua VTO2202.  It will be included in the integration instead of being a separate installation.
+1. Create a new SIP card designed specifically for video doorbells, specifically the Asterisk VTO2202.  It will be included in the integration instead of being a separate installation.
 1. Better handling of the video call to device notification flow
 
 ## Requirements
@@ -52,7 +55,7 @@ The primary goal is to create a relatively simple way to replace a Dahua VTH sta
 Download using **HACS**
  1. Go to HACS
  2. Click on the 3 points in the upper right corner and click on `Custom repositories`
- 3. Paste (https://github.com/itsbrianburton/dahua-doorbell-integration/ into `Add custom repository URL` and by category choose Integration
+ 3. Paste (https://github.com/itsbrianburton/asterisk-doorbell-integration/ into `Add custom repository URL` and by category choose Integration
  4. Click on add and check if the repository is there.
  5. You should now see Asterisk integration. Click `INSTALL`
  6. Restart Home Assistant.

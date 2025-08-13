@@ -1,0 +1,12 @@
+{
+    "domain": "asterisk_doorbell",
+    "name": "Asterisk Doorbell",
+    "codeowners": ["@itsbrianburton"],
+    "documentation": "https://github.com/itsbrianburton/asterisk-doorbell-integration",
+    "issue_tracker": "https://github.com/itsbrianburton/asterisk-doorbell-integration/issues",
+    "loggers": ["custom_components.asterisk"],
+    "requirements": [],
+    "version": "1.0.0",
+    "config_flow": true,
+    "icon": "mdi:phone-in-talk"
+}

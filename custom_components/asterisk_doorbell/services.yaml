@@ -1,0 +1,53 @@
+dial_into_bridge:
+  name: Dial Into Bridge
+  description: Dial an endpoint (e.g., SIP extension) into a bridge
+  target:
+    entity:
+      domain: sensor
+      integration: asterisk_doorbell
+  fields:
+    bridge_id:
+      name: Bridge ID
+      description: The ID of the bridge to dial into
+      required: true
+      example: "1234567890"
+      selector:
+        text:
+    endpoint:
+      name: Endpoint
+      description: The endpoint to dial (e.g., SIP/1001)
+      required: true
+      example: "SIP/1001"
+      selector:
+        text:
+
+call:
+  name: Call Notification
+  description: Notification when a caller joins a confbridge
+  fields:
+    confbridge:
+      name: Confbridge ID
+      description: The ID of the confbridge being joined
+      required: true
+      example: "my_confbridge"
+      selector:
+        text:
+    extension:
+      name: Extension
+      description: The extension number that joined the confbridge
+      required: true
+      example: "1001"
+      selector:
+        text:
+
+terminate:
+  name: Terminate Notification
+  description: Notification when a confbridge is terminated
+  fields:
+    confbridge:
+      name: Confbridge ID
+      description: The ID of the confbridge being terminated
+      required: true
+      example: "my_confbridge"
+      selector:
+        text:

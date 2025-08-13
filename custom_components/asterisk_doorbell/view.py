@@ -1,4 +1,5 @@
 import sys
+import logging
 
 from homeassistant.components.frontend import add_extra_js_url, async_register_built_in_panel
 from homeassistant.components.http import StaticPathConfig
@@ -11,18 +12,22 @@ from .const import (
     SETTINGS_SCRIPT_URL
 )
 
+_LOGGER = logging.getLogger(__name__)
+
 async def async_setup_view(hass):
+    _LOGGER.debug(hass.config.path(f"{COMPONENT_PATH}/dist/{FRONTEND_SCRIPT_URL}"))
+
     # Load the Lovelace card and session manager globally
     await hass.http.async_register_static_paths(
         [
             StaticPathConfig(
                 f"/{FRONTEND_SCRIPT_URL}",
-                hass.config.path(f"{COMPONENT_PATH}/dist/global/{FRONTEND_SCRIPT_URL}"),
+                hass.config.path(f"{COMPONENT_PATH}/dist/{FRONTEND_SCRIPT_URL}"),
                 True
             ),
             StaticPathConfig(
                 f"/{SETTINGS_SCRIPT_URL}",
-                hass.config.path(f"{COMPONENT_PATH}/dist/settings/{SETTINGS_SCRIPT_URL}"),
+                hass.config.path(f"{COMPONENT_PATH}/dist/{SETTINGS_SCRIPT_URL}"),
                 True
             )
         ]
@@ -39,7 +44,7 @@ async def async_setup_view(hass):
         require_admin=True,
         config={
             "_panel_custom": {
-                "name": "dahua-doorbell-panel",
+                "name": "asterisk-doorbell-panel",
                 "js_url": f"/{SETTINGS_SCRIPT_URL}"
             }
         }

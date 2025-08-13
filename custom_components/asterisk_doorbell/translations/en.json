@@ -1,0 +1,76 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Connect to Asterisk Server",
+        "description": "Set up your Asterisk ARI connection details",
+        "data": {
+          "host": "Asterisk Server IP",
+          "port": "Asterisk Server Port",
+          "username": "ARI Username",
+          "password": "ARI Password",
+          "pjsip_username": "PJSIP Username",
+          "pjsip_password": "PJSIP Password"
+        }
+      },
+      "select_confbridges": {
+        "title": "Select Bridges",
+        "description": "We found {count} bridges. Select which ones to monitor.",
+        "data": {
+          "confbridges": "Conference Bridges"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Failed to connect to Asterisk server. Please check your connection details."
+    },
+    "abort": {
+      "already_configured": "This Asterisk server is already configured"
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Update Asterisk Connection",
+        "description": "Update your Asterisk ARI connection details",
+        "data": {
+          "host": "Asterisk Server IP",
+          "port": "Asterisk Server Port",
+          "username": "ARI Username",
+          "password": "ARI Password",
+          "pjsip_username": "PJSIP Username",
+          "pjsip_password": "PJSIP Password"
+        }
+      },
+      "select_confbridges": {
+        "title": "Update Bridge Selection",
+        "description": "Select which bridges to monitor.",
+        "data": {
+          "confbridges": "Bridges"
+        }
+      }
+    },
+    "abort": {
+      "cannot_connect": "Failed to connect to Asterisk server"
+    },
+    "error": {
+      "cannot_connect": "Failed to connect to Asterisk server. Please check your connection details."
+    }
+  },
+  "services": {
+    "dial_into_bridge": {
+      "name": "Dial Into Bridge",
+      "description": "Dial an endpoint (e.g., SIP extension) into a bridge",
+      "fields": {
+        "bridge_id": {
+          "name": "Bridge ID",
+          "description": "The ID of the bridge to dial into"
+        },
+        "endpoint": {
+          "name": "Endpoint",
+          "description": "The endpoint to dial (e.g., SIP/1001)"
+        }
+      }
+    }
+  }
+}

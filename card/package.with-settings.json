@@ -12,6 +12,13 @@
 			"context": "browser",
 			"outputFormat": "esmodule",
 			"distDir": "../custom_components/asterisk_doorbell/dist"
+		},
+		"settings": {
+			"source": "src/asterisk-doorbell-settings.ts",
+			"isLibrary": false,
+			"context": "browser",
+			"outputFormat": "esmodule",
+			"distDir": "../custom_components/asterisk_doorbell/dist"
 		}
 	},
 	"scripts": {
