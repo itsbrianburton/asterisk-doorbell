@@ -37,7 +37,6 @@ export class AsteriskDoorbellSession extends EventTarget {
         }
     };
     private _settings: any = {};
-    private _registeredExtension: string = '';
     private _activeBridgeId: string = '';
     private _localStream: MediaStream | null = null;
     private _audioElement: HTMLAudioElement | null = null;
@@ -46,7 +45,7 @@ export class AsteriskDoorbellSession extends EventTarget {
         super();
 
         // Don't initialize immediately, wait for proper timing
-        this._initializeWhenReady();
+        this._initializeWhenReady().then(r => {});
     }
 
     /**
@@ -84,12 +83,7 @@ export class AsteriskDoorbellSession extends EventTarget {
         try {
             await this._initializeConfig();
             this._initializeAudio();
-            // Only initialize SIP if we have proper credentials
-            if (this._settings.username && this._settings.password) {
-                this._initializeSIPConnection();
-            } else {
-                this._log("No SIP credentials available, SIP connection disabled", "debug");
-            }
+            this._initializeSIPConnection();
 
             this._log("Initialized with ARI server:", this._settings.host);
         } catch (e) {
@@ -146,12 +140,6 @@ export class AsteriskDoorbellSession extends EventTarget {
      * Initialize SIP connection to Asterisk
      */
     private _initializeSIPConnection() {
-        const browserId = this._browserId();
-        if (!browserId) {
-            this._log("No browser ID available", "error");
-            return;
-        }
-
         // Check if we have the required settings
         if (!this._settings.host || !this._settings.websocket_port) {
             this._log("Missing required SIP settings, skipping SIP connection", "debug");
@@ -167,9 +155,9 @@ export class AsteriskDoorbellSession extends EventTarget {
         // Create SIP User Agent
         this._socket = new UA({
             sockets: [socket],
-            uri: `sip:${browserId}@${this._settings.pjsip_domain}`,
-            authorization_user: browserId,
-            password: browserId,
+            uri: `sip:homeassistant@${this._settings.pjsip_domain}`,
+            authorization_user: "homeassistant",
+            password: "",
             register: true,
             register_expires: 300,
             session_timers: false,
@@ -180,10 +168,7 @@ export class AsteriskDoorbellSession extends EventTarget {
         this._socket
             .on('registered', () => {
                 this._log("Successfully registered with Asterisk SIP server");
-                this._registeredExtension = browserId;
-                this.dispatchEvent(new CustomEvent('registered', {
-                    detail: { extension: browserId }
-                }));
+                this.dispatchEvent(new CustomEvent('registered'));
             })
             .on('registrationFailed', (e) => {
                 this._log("SIP registration failed: " + JSON.stringify(e), "error");
@@ -201,16 +186,16 @@ export class AsteriskDoorbellSession extends EventTarget {
                 this._log("SIP WebSocket disconnected", "error");
                 // Don't auto-reconnect for now to avoid spam
                 this._log("SIP auto-reconnect disabled. Manual reconnection required.", "debug");
-            })
-            .on('error', (e) => {
-                this._log("SIP error: " + e.message, "error");
             });
 
-        // Start the SIP stack
-        try {
-            this._socket.start();
-        } catch (e) {
-            this._log("Failed to start SIP client: " + e, "error");
+        // Handle errors separately to avoid type issues
+        this._socket.start();
+
+        // Access the underlying socket for error handling
+        if (socket) {
+            (socket as any).addEventListener('error', (e: any) => {
+                this._log("SIP WebSocket error: " + (e.message || e), "error");
+            });
         }
     }
 
@@ -276,9 +261,17 @@ export class AsteriskDoorbellSession extends EventTarget {
                     }
                 };
 
-                // Store local stream for mute controls
-                if (e.stream) {
-                    this._localStream = e.stream;
+                // Get local stream from the peer connection for mute controls
+                // In modern WebRTC, we need to get the local stream differently
+                const senders = peerconnection.getSenders();
+                if (senders && senders.length > 0) {
+                    const audioSender = senders.find(sender =>
+                        sender.track && sender.track.kind === 'audio'
+                    );
+                    if (audioSender && audioSender.track) {
+                        // Create a MediaStream from the track for mute controls
+                        this._localStream = new MediaStream([audioSender.track]);
+                    }
                 }
             });
 
@@ -361,7 +354,7 @@ export class AsteriskDoorbellSession extends EventTarget {
         try {
             // If we have an incoming call, answer it
             if (this._session && this._session.direction === 'incoming' &&
-                this._session._status === SessionStatus.STATUS_WAITING_FOR_ANSWER) {
+                this._session.status === SessionStatus.STATUS_WAITING_FOR_ANSWER) {
 
                 this._log("Answering incoming call");
                 this._activeBridgeId = bridgeId;

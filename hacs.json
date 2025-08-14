@@ -1,0 +1,6 @@
+{
+	"name": "Asterisk Doorbell",
+	"render_readme": true,
+	"filename": "custom_components/asterisk_doorbell/dist/asterisk-doorbell.js",
+	"content_in_root": false
+}
