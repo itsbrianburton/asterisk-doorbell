@@ -149,6 +149,21 @@ export class AsteriskDoorbellCard extends LitElement {
         console.log('Card: Answering call for confbridge:', this._confbridgeId);
 
         try {
+            // Check session status first
+            if (this._session) {
+                const diagnostics = this._session.getDiagnosticInfo();
+                console.log('Session diagnostic info:', diagnostics);
+
+                if (!diagnostics.socketExists) {
+                    console.error('SIP client not initialized. Attempting manual initialization...');
+                    const success = await this._session.manualInitialize();
+                    if (!success) {
+                        console.error('Manual initialization failed');
+                        return;
+                    }
+                }
+            }
+
             // Call admin extension directly to join confbridge
             if (this._session) {
                 await this._session.answerCall(this._confbridgeId);
@@ -275,7 +290,8 @@ export class AsteriskDoorbellCard extends LitElement {
                         Call Status: ${this._callState}<br>
                         Confbridge: ${this._confbridgeId}<br>
                         Extension: ${this._extension}<br>
-                        Entities: ${this._config.call_status_entity ? '✓' : '✗'} ${this._config.confbridge_id_entity ? '✓' : '✗'} ${this._config.extension_entity ? '✓' : '✗'}
+                        Entities: ${this._config.call_status_entity ? '✓' : '✗'} ${this._config.confbridge_id_entity ? '✓' : '✗'} ${this._config.extension_entity ? '✓' : '✗'}<br>
+                        SIP Status: ${this._session ? (this._session.getDiagnosticInfo ? JSON.stringify(this._session.getDiagnosticInfo()) : 'No diagnostics') : 'No session'}
                     </div>
                 </div>
             </ha-card>

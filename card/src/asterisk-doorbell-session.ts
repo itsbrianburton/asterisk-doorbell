@@ -46,25 +46,40 @@ export class AsteriskDoorbellSession extends EventTarget {
     }
 
     private async _initializeWhenReady() {
+        this._log("Starting initialization...");
         await new Promise(resolve => setTimeout(resolve, 1000));
         try {
             await this.initialize();
+            this._log("Initialization completed successfully");
         } catch (e) {
-            this._log("Initialization failed, will retry in 5 seconds", "error");
+            this._log("Initialization failed: " + e, "error");
+            this._log("Will retry in 5 seconds", "error");
             setTimeout(() => this._initializeWhenReady(), 5000);
         }
     }
 
     async initialize() {
+        this._log("Step 1: Waiting for Home Assistant...");
         const hassReady = await this.provideHass();
         if (!hassReady) {
+            this._log("Home Assistant not available after waiting", "error");
             throw new Error("Home Assistant not available");
         }
+        this._log("Step 1: ✓ Home Assistant ready");
 
         try {
+            this._log("Step 2: Initializing configuration...");
             await this._initializeConfig();
+            this._log("Step 2: ✓ Configuration loaded");
+
+            this._log("Step 3: Initializing media elements...");
             this._initializeMediaElements();
+            this._log("Step 3: ✓ Media elements ready");
+
+            this._log("Step 4: Initializing SIP connection...");
             this._initializeSIPConnection();
+            this._log("Step 4: ✓ SIP connection initiated");
+
         } catch (e) {
             this._log("Error during initialization: " + e, "error");
             throw e;
@@ -109,36 +124,44 @@ export class AsteriskDoorbellSession extends EventTarget {
         const socketUrl = `wss://${this._settings.asterisk_host}:${this._settings.websocket_port}/ws`;
         this._log(`Attempting to connect to Asterisk WebSocket: ${socketUrl}`);
 
-        const socket = new WebSocketInterface(socketUrl);
+        try {
+            const socket = new WebSocketInterface(socketUrl);
 
-        this._socket = new UA({
-            sockets: [socket],
-            uri: `sip:homeassistant@${this._settings.asterisk_host}`,
-            authorization_user: "homeassistant",
-            password: "", // No password needed for homeassistant extension
-            register: true,
-            register_expires: 300,
-            session_timers: false,
-            user_agent: 'Asterisk Doorbell HA'
-        });
-
-        this._socket
-            .on('registered', () => {
-                this._log("SIP client registered successfully");
-                this.dispatchEvent(new CustomEvent('sip_registered'));
-            })
-            .on('registrationFailed', (e) => {
-                this._log("SIP registration failed: " + JSON.stringify(e), "error");
-            })
-            .on('newRTCSession', (event: RTCSessionEvent) => this._handleNewRTCSession(event))
-            .on('connected', () => {
-                this._log("SIP WebSocket connected to " + socketUrl);
-            })
-            .on('disconnected', () => {
-                this._log("SIP WebSocket disconnected", "error");
+            this._socket = new UA({
+                sockets: [socket],
+                uri: `sip:homeassistant@${this._settings.asterisk_host}`,
+                authorization_user: "homeassistant",
+                password: "", // No password needed for homeassistant extension
+                register: true,
+                register_expires: 300,
+                session_timers: false,
+                user_agent: 'Asterisk Doorbell HA'
             });
 
-        this._socket.start();
+            this._socket
+                .on('registered', () => {
+                    this._log("✓ SIP client registered successfully");
+                    this.dispatchEvent(new CustomEvent('sip_registered'));
+                })
+                .on('registrationFailed', (e) => {
+                    this._log("✗ SIP registration failed: " + JSON.stringify(e), "error");
+                })
+                .on('newRTCSession', (event: RTCSessionEvent) => this._handleNewRTCSession(event))
+                .on('connected', () => {
+                    this._log("✓ SIP WebSocket connected to " + socketUrl);
+                })
+                .on('disconnected', () => {
+                    this._log("✗ SIP WebSocket disconnected", "error");
+                });
+
+            this._log("Starting SIP client...");
+            this._socket.start();
+            this._log("SIP client start() called");
+
+        } catch (error) {
+            this._log("Error creating SIP client: " + error, "error");
+            this._socket = null;
+        }
     }
 
     private _handleNewRTCSession(event: RTCSessionEvent) {
@@ -220,8 +243,19 @@ export class AsteriskDoorbellSession extends EventTarget {
      * Answer a doorbell call by calling the admin extension for the given confbridge
      */
     async answerCall(confbridgeId: string) {
+        this._log(`Answer call requested for confbridge: ${confbridgeId}`);
+
+        // Check SIP client status
         if (!this._socket) {
             this._log("SIP client not available", "error");
+            this._log("Diagnostic info:", this.getDiagnosticInfo());
+            return false;
+        }
+
+        // Check if SIP client is registered
+        if (!this._socket.isRegistered()) {
+            this._log("SIP client not registered", "error");
+            this._log("Diagnostic info:", this.getDiagnosticInfo());
             return false;
         }
 
@@ -335,6 +369,34 @@ export class AsteriskDoorbellSession extends EventTarget {
         return "9001";
     }
 
+    /**
+     * Get diagnostic information about the session state
+     */
+    getDiagnosticInfo() {
+        return {
+            socketExists: !!this._socket,
+            socketStatus: this._socket ? (this._socket.isRegistered() ? 'registered' : 'not registered') : 'null',
+            sessionExists: !!this._session,
+            settings: this._settings,
+            hassConnected: !!this._hass,
+        };
+    }
+
+    /**
+     * Manually trigger initialization (for debugging)
+     */
+    async manualInitialize() {
+        this._log("Manual initialization triggered");
+        try {
+            await this.initialize();
+            this._log("Manual initialization successful");
+            return true;
+        } catch (e) {
+            this._log("Manual initialization failed: " + e, "error");
+            return false;
+        }
+    }
+
     async provideHass() {
         await customElements.whenDefined("home-assistant");
         let attempts = 0;
@@ -350,6 +412,22 @@ export class AsteriskDoorbellSession extends EventTarget {
             attempts++;
         }
         return false;
+    }
+
+    /**
+     * Check if the session is ready to make calls
+     */
+    isReady(): boolean {
+        return !!(this._socket && this._socket.isRegistered());
+    }
+
+    /**
+     * Get current connection status
+     */
+    getStatus(): string {
+        if (!this._socket) return 'not_initialized';
+        if (!this._socket.isRegistered()) return 'not_registered';
+        return 'ready';
     }
 
     private _log(msg: any, type: string = "debug") {
