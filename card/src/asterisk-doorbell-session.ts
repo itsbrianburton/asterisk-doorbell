@@ -17,19 +17,18 @@ enum SessionStatus {
 }
 
 /**
- * This class maintains an open connection to the Asterisk server
- * and handles call management for the Asterisk Doorbell integration.
+ * This class maintains a WebRTC connection to Asterisk for actual audio/video communication
+ * Works with the new three global sensor architecture
  */
 export class AsteriskDoorbellSession extends EventTarget {
     private _socket: UA | null = null;
     private _session: RTCSession | null = null;
-    private _sessionStatus: string = 'idle';
     private _hass: any = null;
     private _debug = true;
     private _callConfig: any = {
         mediaConstraints: {
             audio: true,
-            video: false
+            video: true
         },
         rtcOfferConstraints: {
             offerToReceiveAudio: true,
@@ -37,405 +36,320 @@ export class AsteriskDoorbellSession extends EventTarget {
         }
     };
     private _settings: any = {};
-    private _activeBridgeId: string = '';
     private _localStream: MediaStream | null = null;
-    private _audioElement: HTMLAudioElement | null = null;
+    private _remoteAudioElement: HTMLAudioElement | null = null;
+    private _remoteVideoElement: HTMLVideoElement | null = null;
 
     constructor() {
         super();
-
-        // Don't initialize immediately, wait for proper timing
         this._initializeWhenReady().then(r => {});
     }
 
-    /**
-     * Initialize when Home Assistant is ready
-     */
     private async _initializeWhenReady() {
-        // Wait a bit for the DOM to be ready
         await new Promise(resolve => setTimeout(resolve, 1000));
-
         try {
             await this.initialize();
         } catch (e) {
             this._log("Initialization failed, will retry in 5 seconds", "error");
-            // Retry after 5 seconds
             setTimeout(() => this._initializeWhenReady(), 5000);
         }
     }
 
-    /**
-     * Initialize the session and settings
-     */
     async initialize() {
         const hassReady = await this.provideHass();
-
         if (!hassReady) {
-            this._log("Home Assistant wasn't loaded", "error");
             throw new Error("Home Assistant not available");
-        }
-
-        if (!this._browserId()) {
-            this._log("browser_mod not loaded - this is optional for basic functionality", "debug");
-            // Don't throw an error here, as browser_mod might not be required
         }
 
         try {
             await this._initializeConfig();
-            this._initializeAudio();
+            this._initializeMediaElements();
             this._initializeSIPConnection();
-
-            this._log("Initialized with ARI server:", this._settings.host);
         } catch (e) {
             this._log("Error during initialization: " + e, "error");
             throw e;
         }
     }
 
-    /**
-     * Initialize audio element for remote audio
-     */
-    private _initializeAudio() {
-        this._audioElement = document.createElement('audio');
-        this._audioElement.autoplay = true;
-        document.body.appendChild(this._audioElement);
+    private _initializeMediaElements() {
+        // Create audio element for remote audio
+        this._remoteAudioElement = document.createElement('audio');
+        this._remoteAudioElement.autoplay = true;
+        document.body.appendChild(this._remoteAudioElement);
+
+        // Create video element for remote video (doorbell camera)
+        this._remoteVideoElement = document.createElement('video');
+        this._remoteVideoElement.autoplay = true;
+        this._remoteVideoElement.style.display = 'none'; // Hidden by default
+        document.body.appendChild(this._remoteVideoElement);
     }
 
-    /**
-     * Fetch configuration from Home Assistant
-     */
     private async _initializeConfig() {
         try {
-            // Try to get config from Home Assistant
             this._settings = await this._hass.callWS({
                 type: "asterisk_doorbell/get_settings"
             });
-
-            this._log("Received settings from Home Assistant", this._settings);
         } catch (e) {
-            this._log("Failed to get settings from Home Assistant: " + e, "error");
-            this._log("Using default settings", "debug");
-
-            // Fallback to default settings
+            this._log("Failed to get settings, using defaults", "error");
             this._settings = {
-                host: window.location.hostname,
-                port: 8088,
+                asterisk_host: window.location.hostname,
                 websocket_port: 8089,
-                username: this._browserId() || 'guest',
-                password: this._browserId() || 'guest',
-                pjsip_domain: window.location.hostname,
-                bridges: []
             };
         }
     }
 
-    /**
-     * Get browser ID for SIP registration
-     */
-    private _browserId() {
-        return localStorage['browser_mod-browser-id'] || false;
-    }
-
-    /**
-     * Initialize SIP connection to Asterisk
-     */
     private _initializeSIPConnection() {
-        // Check if we have the required settings
-        if (!this._settings.host || !this._settings.websocket_port) {
-            this._log("Missing required SIP settings, skipping SIP connection", "debug");
+        if (!this._settings.asterisk_host || !this._settings.websocket_port) {
+            this._log("Missing SIP settings", "error");
             return;
         }
 
-        // Configure WebSocket for SIP
-        const socketUrl = `wss://${this._settings.host}:${this._settings.websocket_port}/ws`;
-        this._log(`Attempting to connect to SIP WebSocket: ${socketUrl}`);
-
+        const socketUrl = `wss://${this._settings.asterisk_host}:${this._settings.websocket_port}/ws`;
         const socket = new WebSocketInterface(socketUrl);
 
-        // Create SIP User Agent
         this._socket = new UA({
             sockets: [socket],
-            uri: `sip:homeassistant@${this._settings.pjsip_domain}`,
+            uri: `sip:homeassistant@${this._settings.asterisk_host}`,
             authorization_user: "homeassistant",
-            password: "",
+            password: "", // No password needed for homeassistant extension
             register: true,
             register_expires: 300,
             session_timers: false,
             user_agent: 'Asterisk Doorbell HA'
         });
 
-        // Set up event handlers
         this._socket
             .on('registered', () => {
-                this._log("Successfully registered with Asterisk SIP server");
-                this.dispatchEvent(new CustomEvent('registered'));
+                this._log("SIP client registered successfully");
+                this.dispatchEvent(new CustomEvent('sip_registered'));
             })
             .on('registrationFailed', (e) => {
                 this._log("SIP registration failed: " + JSON.stringify(e), "error");
-                this.dispatchEvent(new Event('registration_failed'));
             })
-            .on('unregistered', () => {
-                this._log("SIP client unregistered");
-                this.dispatchEvent(new Event('unregistered'));
-            })
-            .on('newRTCSession', (event: RTCSessionEvent) => this._handleNewRTCSession(event))
-            .on('connected', () => {
-                this._log("SIP WebSocket connected");
-            })
-            .on('disconnected', () => {
-                this._log("SIP WebSocket disconnected", "error");
-                // Don't auto-reconnect for now to avoid spam
-                this._log("SIP auto-reconnect disabled. Manual reconnection required.", "debug");
-            });
+            .on('newRTCSession', (event: RTCSessionEvent) => this._handleNewRTCSession(event));
 
-        // Handle errors separately to avoid type issues
         this._socket.start();
-
-        // Access the underlying socket for error handling
-        if (socket) {
-            (socket as any).addEventListener('error', (e: any) => {
-                this._log("SIP WebSocket error: " + (e.message || e), "error");
-            });
-        }
     }
 
-    /**
-     * Handle a new RTC session (incoming or outgoing call)
-     */
     private _handleNewRTCSession(event: RTCSessionEvent) {
-        this._log("New RTC session", "debug");
-
-        // If we already have a session, terminate the new one
         if (this._session) {
-            this._log("Already have active session, terminating new one", "debug");
+            this._log("Already have active session, rejecting new one");
             event.session.terminate();
             return;
         }
 
         this._session = event.session;
 
-        // Set up session event handlers
         this._session
-            .on('accepted', (e: IncomingEvent | OutgoingEvent) => {
-                this._log("Call accepted");
-                this._sessionStatus = 'active';
-                this.dispatchEvent(new Event('call_accepted'));
-            })
-            .on('confirmed', () => {
-                this._log("Call confirmed");
+            .on('accepted', () => {
+                this._log("WebRTC session accepted - audio/video connected");
+                this.dispatchEvent(new CustomEvent('media_connected'));
             })
             .on('ended', () => {
-                this._log("Call ended");
+                this._log("WebRTC session ended");
                 this._cleanupSession();
-                this.dispatchEvent(new Event('call_ended'));
+                this.dispatchEvent(new CustomEvent('media_disconnected'));
             })
             .on('failed', (e) => {
-                this._log("Call failed: " + e.cause, "error");
+                this._log("WebRTC session failed: " + e.cause, "error");
                 this._cleanupSession();
-                this.dispatchEvent(new CustomEvent('call_failed', {
-                    detail: { cause: e.cause }
-                }));
-            })
-            .on('muted', (data) => {
-                this._log("Call muted: " + JSON.stringify(data));
-                this.dispatchEvent(new CustomEvent('call_muted', {
-                    detail: { audio: data.audio, video: data.video }
-                }));
-            })
-            .on('unmuted', (data) => {
-                this._log("Call unmuted: " + JSON.stringify(data));
-                this.dispatchEvent(new CustomEvent('call_unmuted', {
-                    detail: { audio: data.audio, video: data.video }
-                }));
             })
             .on('peerconnection', (e) => {
                 const peerconnection = e.peerconnection;
 
-                // Handle remote streams
+                // Handle remote media streams
                 peerconnection.ontrack = (event) => {
                     if (event.streams && event.streams[0]) {
-                        this._log("Received remote media stream");
-                        if (this._audioElement) {
-                            this._audioElement.srcObject = event.streams[0];
+                        const stream = event.streams[0];
+                        const videoTracks = stream.getVideoTracks();
+                        const audioTracks = stream.getAudioTracks();
+
+                        if (videoTracks.length > 0 && this._remoteVideoElement) {
+                            this._remoteVideoElement.srcObject = stream;
+                            this._log("Video stream connected");
+                            this.dispatchEvent(new CustomEvent('video_stream_ready', {
+                                detail: { videoElement: this._remoteVideoElement }
+                            }));
+                        }
+
+                        if (audioTracks.length > 0 && this._remoteAudioElement) {
+                            this._remoteAudioElement.srcObject = stream;
+                            this._log("Audio stream connected");
                         }
                     }
                 };
 
-                // Get local stream from the peer connection for mute controls
-                // In modern WebRTC, we need to get the local stream differently
+                // Get local stream for mute controls
                 const senders = peerconnection.getSenders();
-                if (senders && senders.length > 0) {
-                    const audioSender = senders.find(sender =>
-                        sender.track && sender.track.kind === 'audio'
-                    );
-                    if (audioSender && audioSender.track) {
-                        // Create a MediaStream from the track for mute controls
-                        this._localStream = new MediaStream([audioSender.track]);
-                    }
+                const audioSender = senders.find(s => s.track && s.track.kind === 'audio');
+                if (audioSender && audioSender.track) {
+                    this._localStream = new MediaStream([audioSender.track]);
                 }
             });
-
-        // If it's an incoming call
-        if (this._session.direction === 'incoming') {
-            this._log("Incoming call from: " + this._session.remote_identity.uri.user);
-            this._sessionStatus = 'ringing';
-
-            // Notify the UI of the incoming call
-            this.dispatchEvent(new CustomEvent('incoming_call', {
-                detail: {
-                    session: this._session,
-                    caller: {
-                        name: this._session.remote_identity.display_name || this._session.remote_identity.uri.user,
-                        extension: this._session.remote_identity.uri.user
-                    }
-                }
-            }));
-        }
     }
 
-    /**
-     * Clean up after a call ends
-     */
     private _cleanupSession() {
         if (this._localStream) {
             this._localStream.getTracks().forEach(track => track.stop());
             this._localStream = null;
         }
 
-        if (this._audioElement) {
-            this._audioElement.srcObject = null;
+        if (this._remoteAudioElement) {
+            this._remoteAudioElement.srcObject = null;
+        }
+
+        if (this._remoteVideoElement) {
+            this._remoteVideoElement.srcObject = null;
+            this._remoteVideoElement.style.display = 'none';
         }
 
         this._session = null;
-        this._sessionStatus = 'idle';
-        this._activeBridgeId = '';
     }
 
     /**
-     * Get Home Assistant instance when available
+     * Answer a doorbell call by calling the admin extension for the given confbridge
      */
-    async provideHass() {
-        // Wait for custom elements to be defined
-        await customElements.whenDefined("home-assistant");
-
-        // Wait for home-assistant element to be available with more retries
-        let attempts = 0;
-        const maxAttempts = 100; // Increase max attempts
-
-        while (attempts < maxAttempts) {
-            const query = document.querySelector("home-assistant");
-
-            if (query && (query as any).hass) {
-                this._hass = (query as any).hass;
-                this._log("Successfully connected to Home Assistant");
-                return true;
-            }
-
-            // Wait longer between attempts
-            await new Promise(r => setTimeout(r, 200));
-            attempts++;
+    async answerCall(confbridgeId: string) {
+        if (!this._socket) {
+            this._log("SIP client not available", "error");
+            return false;
         }
 
-        this._log(`Failed to connect to Home Assistant after ${maxAttempts} attempts`, "error");
+        try {
+            // Get the admin extension for this confbridge
+            const adminExtension = this._getAdminExtensionForConfbridge(confbridgeId);
+
+            // Make SIP call to the admin extension - this triggers doorbell-admin macro
+            const callTarget = `sip:${adminExtension}@${this._settings.asterisk_host}`;
+
+            this._log(`Answering call by calling admin extension: ${callTarget}`);
+
+            this._session = this._socket.call(callTarget, this._callConfig);
+
+            // Asterisk will automatically:
+            // 1. Execute doorbell-admin macro
+            // 2. Join homeassistant to confbridge as admin
+            // 3. Send "answered" webhook to HA
+            // 4. Establish WebRTC audio/video between browser and doorbell
+
+            return true;
+
+        } catch (e) {
+            this._log("Error answering call: " + e, "error");
+            return false;
+        }
+    }
+
+    /**
+     * Hang up the current call
+     */
+    async hangupCall() {
+        if (this._session) {
+            try {
+                this._session.terminate();
+
+                // Asterisk will automatically:
+                // 1. Clean up the confbridge when admin leaves
+                // 2. Send "terminate" webhook to HA
+                // 3. Update sensor states
+
+                return true;
+            } catch (e) {
+                this._log("Error hanging up call: " + e, "error");
+                return false;
+            }
+        }
         return false;
     }
 
     /**
-     * Answer an incoming call and connect to the specified bridge
-     */
-    async answer(bridgeId: string, extension: string) {
-        this._log(`Answering call to join bridge ${bridgeId} with extension ${extension}`);
-
-        if (!this._socket) {
-            this._log("SIP client not initialized", "error");
-            return;
-        }
-
-        try {
-            // If we have an incoming call, answer it
-            if (this._session && this._session.direction === 'incoming' &&
-                this._session.status === SessionStatus.STATUS_WAITING_FOR_ANSWER) {
-
-                this._log("Answering incoming call");
-                this._activeBridgeId = bridgeId;
-                await this._session.answer(this._callConfig);
-            } else {
-                // Otherwise, make an outgoing call to join the bridge
-                this._log("Making outgoing call to join bridge");
-
-                // Use the Home Assistant service to dial into the bridge
-                await this._hass.callService('asterisk_doorbell', 'dial_into_bridge', {
-                    bridge_id: bridgeId,
-                    endpoint: `SIP/${extension}`
-                });
-
-                this._activeBridgeId = bridgeId;
-            }
-        } catch (e) {
-            this._log("Error answering call: " + e, "error");
-        }
-    }
-
-    /**
-     * Toggle microphone mute state
+     * Toggle microphone mute
      */
     async toggleMute(mute: boolean) {
-        if (!this._session || this._sessionStatus !== 'active') {
-            this._log("No active call to mute", "error");
-            return;
+        if (!this._session) {
+            this._log("No active session to mute", "error");
+            return false;
         }
 
         try {
             if (mute) {
                 await this._session.mute({ audio: true, video: false });
-                this._log("Microphone muted");
             } else {
                 await this._session.unmute({ audio: true, video: false });
-                this._log("Microphone unmuted");
             }
+            return true;
         } catch (e) {
             this._log("Error toggling mute: " + e, "error");
+            return false;
         }
     }
 
     /**
-     * Terminate the active call
+     * Get the video element for display in UI
      */
-    async terminate(bridgeId: string) {
-        this._log("Terminating call");
+    getVideoElement(): HTMLVideoElement | null {
+        return this._remoteVideoElement;
+    }
 
-        if (!this._socket) {
-            this._log("SIP client not initialized", "error");
-            return;
-        }
-
-        try {
-            // If we have an active session, terminate it
-            if (this._session) {
-                await this._session.terminate();
-            }
-
-            // Also call the Home Assistant service to clean up
-            if (bridgeId) {
-                await this._hass.callService('asterisk_doorbell', 'terminate', {
-                    confbridge: bridgeId
-                });
-            }
-        } catch (e) {
-            this._log("Error terminating call: " + e, "error");
+    /**
+     * Show/hide the video element
+     */
+    setVideoVisible(visible: boolean) {
+        if (this._remoteVideoElement) {
+            this._remoteVideoElement.style.display = visible ? 'block' : 'none';
         }
     }
 
     /**
-     * Logger function
+     * Map confbridge ID to admin extension based on your numbering scheme
+     * This needs to match your extensions.conf configuration
      */
+    private _getAdminExtensionForConfbridge(confbridgeId: string): string {
+        // Default mapping - you may need to customize this based on your setup
+        const mapping: { [key: string]: string } = {
+            'doorbell_front_door': '9001',
+            'doorbell_back_door': '9101',
+            'doorbell_side_door': '9201',
+            'doorbell_garage': '9301',
+            'doorbell_office': '9401',
+        };
+
+        // Return mapped extension or calculate based on pattern
+        if (mapping[confbridgeId]) {
+            return mapping[confbridgeId];
+        }
+
+        // Fallback: try to extract number from confbridge name
+        // This is a basic example - customize for your naming scheme
+        this._log(`No mapping found for confbridge ${confbridgeId}, using default admin extension 9001`, "warning");
+        return "9001";
+    }
+
+    async provideHass() {
+        await customElements.whenDefined("home-assistant");
+        let attempts = 0;
+        const maxAttempts = 50;
+
+        while (attempts < maxAttempts) {
+            const query = document.querySelector("home-assistant");
+            if (query && (query as any).hass) {
+                this._hass = (query as any).hass;
+                return true;
+            }
+            await new Promise(r => setTimeout(r, 200));
+            attempts++;
+        }
+        return false;
+    }
+
     private _log(msg: any, type: string = "debug") {
-        const prefix = "[ASTERISK_DOORBELL]";
-
+        const prefix = "[ASTERISK_DOORBELL_SESSION]";
         if (type === "debug" && this._debug) {
             console.debug(prefix, msg);
         } else if (type === "error") {
             console.error(prefix, msg);
+        } else if (type === "warning") {
+            console.warn(prefix, msg);
         }
     }
 }
