@@ -1,4 +1,3 @@
-import sys
 import logging
 
 from homeassistant.components.frontend import add_extra_js_url, async_register_built_in_panel
@@ -17,7 +16,7 @@ _LOGGER = logging.getLogger(__name__)
 async def async_setup_view(hass):
     _LOGGER.debug(hass.config.path(f"{COMPONENT_PATH}/dist/{FRONTEND_SCRIPT_URL}"))
 
-    # Load the Lovelace card and session manager globally
+    # Load the Lovelace card and panel scripts
     await hass.http.async_register_static_paths(
         [
             StaticPathConfig(

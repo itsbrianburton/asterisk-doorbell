@@ -1,13 +1,12 @@
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
-from asterisk_doorbell import DOMAIN
+from .const import DOMAIN
 
 
 class AsteriskDoorbellEntity(CoordinatorEntity):
-	def __init__(self, coordinator, browserId, extension, name, icon=None):
+	def __init__(self, coordinator, entry_id, name, icon=None):
 		super().__init__(coordinator)
-		self.browserId = browserId
-		self.extension = extension
+		self.entry_id = entry_id
 		self._name = name
 		self._icon = icon
 
@@ -18,5 +17,5 @@ class AsteriskDoorbellEntity(CoordinatorEntity):
 	@property
 	def device_info(self):
 		return {
-			"identifiers": {(DOMAIN, self.browserId)}
+			"identifiers": {(DOMAIN, self.entry_id)}
 		}

@@ -1,53 +1,49 @@
-dial_into_bridge:
-  name: Dial Into Bridge
-  description: Dial an endpoint (e.g., SIP extension) into a bridge
-  target:
-    entity:
-      domain: sensor
-      integration: asterisk_doorbell
-  fields:
-    bridge_id:
-      name: Bridge ID
-      description: The ID of the bridge to dial into
-      required: true
-      example: "1234567890"
-      selector:
-        text:
-    endpoint:
-      name: Endpoint
-      description: The endpoint to dial (e.g., SIP/1001)
-      required: true
-      example: "SIP/1001"
-      selector:
-        text:
-
 call:
-  name: Call Notification
-  description: Notification when a caller joins a confbridge
+  name: Doorbell Ring Notification
+  description: Webhook notification when someone is at the door (called by Asterisk). Updates confbridge_id and extension sensors first, then call_status last.
   fields:
     confbridge:
       name: Confbridge ID
-      description: The ID of the confbridge being joined
+      description: The ID of the confbridge being joined by the doorbell
       required: true
-      example: "my_confbridge"
+      example: "doorbell_front_door"
       selector:
         text:
     extension:
       name: Extension
       description: The extension number that joined the confbridge
       required: true
-      example: "1001"
+      example: "9001"
+      selector:
+        text:
+
+answered:
+  name: Call Answered Notification
+  description: Webhook notification when a doorbell call is answered (called by Asterisk). Updates confbridge_id and extension sensors first, then call_status last.
+  fields:
+    confbridge:
+      name: Confbridge ID
+      description: The ID of the confbridge where the call was answered
+      required: true
+      example: "doorbell_front_door"
+      selector:
+        text:
+    extension:
+      name: Extension
+      description: The extension that answered the call
+      required: true
+      example: "9001"
       selector:
         text:
 
 terminate:
-  name: Terminate Notification
-  description: Notification when a confbridge is terminated
+  name: Call Ended Notification
+  description: Webhook notification when a doorbell call is terminated (called by Asterisk). Updates confbridge_id sensor first, clears extension, then sets call_status to inactive last.
   fields:
     confbridge:
       name: Confbridge ID
       description: The ID of the confbridge being terminated
       required: true
-      example: "my_confbridge"
+      example: "doorbell_front_door"
       selector:
         text:

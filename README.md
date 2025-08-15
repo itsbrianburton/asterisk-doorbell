@@ -1,19 +1,16 @@
 # Asterisk Doorbell Integration
 
-This was inspired by TECH7Fox's excellent [Asterisk Integration](https://github.com/TECH7Fox/Asterisk-integration), but written from the ground up to improve a few pain points:
-* Uses Browser Mod to notify specific HA clients rather than creating multiple persons.
-* Maintains a connection to the Asterisk server while using HA for faster responses.
-* Uses confbridges (conference calls) to take advantage
+This was inspired by TECH7Fox's excellent [Asterisk Integration](https://github.com/TECH7Fox/Asterisk-integration), but written from the ground up to function as a simple video doorbell integration.
 
-### How It's Different
+
+### How It's Works
 
 
 <img src="images/integration-details.svg" />
 
 
 ## Requirements
-* [HACS](https://www.hacs.xyz/docs/use/download/download/#to-download-hacs-ossupervised) - **(Required)** Necessary to install the following integrations
-* [Browser Mod](https://github.com/thomasloven/hass-browser_mod) - **(Required)** Used to identify individual HA instances and send users directly to the correct dashboard to answer a call.
+* [HACS](https://www.hacs.xyz/docs/use/download/download/#to-download-hacs-ossupervised) - **(Required)** Necessary to install this integration
 * Asterisk Server - **(Requuired)**
 
 ## Installation
