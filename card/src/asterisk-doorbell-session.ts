@@ -40,6 +40,8 @@ export class AsteriskDoorbellSession extends EventTarget {
     private _remoteAudioElement: HTMLAudioElement | null = null;
     private _remoteVideoElement: HTMLVideoElement | null = null;
     private _initializationAttempted: boolean = false;
+    private _entityCallStatus: string = 'inactive';
+    private _entityConfbridgeId: string | undefined;
     private _entityExtension: string | undefined;
 
     constructor() {
@@ -60,15 +62,22 @@ export class AsteriskDoorbellSession extends EventTarget {
         }
     }
 
-    private _autoDetectSensors() {
+    private _subscribeToEntityUpdates() {
         if (!this._hass) return;
 
-        // Look for the three global sensors
-        Object.keys(this._hass.states).forEach(entityId => {
-            if (entityId.includes('asterisk_doorbell_extension')) {
-                this._entityExtension = entityId;
+        // Subscribe to state changes for your specific entity
+        this._hass.connection.subscribeEvents((event: any) => {
+            if (event.data.entity_id.includes('sensor.asterisk_doorbell_')) {
+                this._log("Asterisk entity updated ["+event.data.entity_id+"]:", event.data);
+                if (event.data.entity_id === 'sensor.asterisk_doorbell_call_status') {
+                    this._entityCallStatus = event.data.new_state.state;
+                } else if (event.data.entity_id === 'sensor.asterisk_doorbell_confbridge_id') {
+                    this._entityConfbridgeId = event.data.new_state.state;
+                } else if (event.data.entity_id === 'sensor.asterisk_doorbell_extension') {
+                    this._entityCallStatus = event.data.new_state.state;
+                }
             }
-        });
+        }, "state_changed");
     }
 
     async initialize() {
@@ -297,11 +306,8 @@ export class AsteriskDoorbellSession extends EventTarget {
         }
 
         try {
-            // Get the admin extension for this confbridge
-            const adminExtension = this._getAdminExtensionForConfbridge();
-
             // Make SIP call to the admin extension - this triggers doorbell-admin macro
-            const callTarget = `sip:${adminExtension}@${this._settings.asterisk_host}`;
+            const callTarget = `sip:${this._entityExtension}@${this._settings.asterisk_host}`;
 
             this._log(`Answering call by calling admin extension: ${callTarget}`);
 
@@ -382,21 +388,6 @@ export class AsteriskDoorbellSession extends EventTarget {
     }
 
     /**
-     * Map confbridge ID to admin extension based on your numbering scheme
-     * This needs to match your extensions.conf configuration
-     */
-    private _getAdminExtensionForConfbridge(): string {
-        if (this._hass && this._entityExtension) {
-            if (this._hass.states[this._entityExtension]) {
-                this._log("State:", this._hass.states[this._entityExtension]);
-                return this._hass.states[this._entityExtension].state;
-            }
-        }
-
-        return '';
-    }
-
-    /**
      * Get diagnostic information about the session state
      */
     getDiagnosticInfo() {
@@ -436,7 +427,7 @@ export class AsteriskDoorbellSession extends EventTarget {
                 this._hass = (query as any).hass;
                 this._log(`Found Home Assistant after ${attempts} attempts`);
 
-                this._autoDetectSensors();
+                this._subscribeToEntityUpdates();
 
                 return true;
             }
