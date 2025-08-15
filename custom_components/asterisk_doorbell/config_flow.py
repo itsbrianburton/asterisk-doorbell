@@ -15,7 +15,7 @@ _LOGGER = logging.getLogger(__name__)
 STEP_USER_DATA_SCHEMA = vol.Schema(
     {
         vol.Required("asterisk_host"): str,
-        vol.Required("websocket_port", default=8089): int,
+        vol.Required("asterisk_websocket_port", default=8089): int,
     }
 )
 
@@ -30,9 +30,9 @@ class AsteriskDoorbellConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         errors = {}
 
         if user_input is not None:
-            # Create the entry directly since no confbridge configuration is needed
+            # Create the entry directly since no validation is needed
             return self.async_create_entry(
-                title=f"Asterisk @ {user_input['asterisk_host']}",
+                title=f"Asterisk Doorbell @ {user_input['asterisk_host']}",
                 data=user_input,
             )
 
@@ -41,7 +41,8 @@ class AsteriskDoorbellConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             data_schema=STEP_USER_DATA_SCHEMA,
             errors=errors,
             description_placeholders={
-                "docs_url": "https://github.com/itsbrianburton/asterisk-doorbell-integration"
+                "docs_url": "https://github.com/itsbrianburton/asterisk-doorbell-integration",
+                "websocket_info": "This is the WebSocket port that JSSIP will use to connect to Asterisk (typically 8089)."
             },
         )
 
@@ -66,7 +67,7 @@ class AsteriskDoorbellOptionsFlow(config_entries.OptionsFlow):
         # Set default values from current config
         default_values = {
             "asterisk_host": self.config_entry.data.get("asterisk_host", ""),
-            "websocket_port": self.config_entry.data.get("websocket_port", 8089),
+            "asterisk_websocket_port": self.config_entry.data.get("asterisk_websocket_port", 8089),
         }
 
         if user_input is not None:
@@ -80,7 +81,7 @@ class AsteriskDoorbellOptionsFlow(config_entries.OptionsFlow):
         schema = vol.Schema(
             {
                 vol.Required("asterisk_host", default=default_values["asterisk_host"]): str,
-                vol.Required("websocket_port", default=default_values["websocket_port"]): int,
+                vol.Required("asterisk_websocket_port", default=default_values["asterisk_websocket_port"]): int,
             }
         )
 
@@ -88,4 +89,7 @@ class AsteriskDoorbellOptionsFlow(config_entries.OptionsFlow):
             step_id="init",
             data_schema=schema,
             errors=errors,
+            description_placeholders={
+                "websocket_info": "This is the WebSocket port that JSSIP will use to connect to Asterisk (typically 8089)."
+            },
         )

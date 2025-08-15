@@ -47,7 +47,7 @@ async def websocket_get_settings(
         # Update settings from entry data
         settings.update({
             "asterisk_host": entry_data.get("asterisk_host", ""),
-            "websocket_port": entry_data.get("websocket_port", 8089),
+            "websocket_port": entry_data.get("asterisk_websocket_port", 8089),
         })
 
     connection.send_result(msg["id"], settings)

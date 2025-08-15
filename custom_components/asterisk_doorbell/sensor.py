@@ -5,7 +5,6 @@ from homeassistant.components.sensor import SensorEntity
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
-from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import DOMAIN, STATE_INACTIVE
 
@@ -30,12 +29,12 @@ async def async_setup_entry(
     async_add_entities(entities)
 
 
-class AsteriskCallStatusSensor(CoordinatorEntity, SensorEntity):
+class AsteriskCallStatusSensor(SensorEntity):
     """Sensor for call status (updated last to avoid race conditions)."""
 
     def __init__(self, coordinator, entry_id):
         """Initialize the sensor."""
-        super().__init__(coordinator)
+        self.coordinator = coordinator
         self._entry_id = entry_id
 
         self._attr_name = "Asterisk Doorbell Call Status"
@@ -59,9 +58,7 @@ class AsteriskCallStatusSensor(CoordinatorEntity, SensorEntity):
     @property
     def native_value(self):
         """Return the call status."""
-        if hasattr(self.coordinator, 'call_status'):
-            return self.coordinator.call_status
-        return STATE_INACTIVE
+        return getattr(self.coordinator, 'call_status', STATE_INACTIVE)
 
     @property
     def icon(self):
@@ -74,12 +71,12 @@ class AsteriskCallStatusSensor(CoordinatorEntity, SensorEntity):
         return "mdi:phone-off"
 
 
-class AsteriskConfbridgeIdSensor(CoordinatorEntity, SensorEntity):
+class AsteriskConfbridgeIdSensor(SensorEntity):
     """Sensor for confbridge ID."""
 
     def __init__(self, coordinator, entry_id):
         """Initialize the sensor."""
-        super().__init__(coordinator)
+        self.coordinator = coordinator
         self._entry_id = entry_id
 
         self._attr_name = "Asterisk Doorbell Confbridge ID"
@@ -103,9 +100,7 @@ class AsteriskConfbridgeIdSensor(CoordinatorEntity, SensorEntity):
     @property
     def native_value(self):
         """Return the confbridge ID."""
-        if hasattr(self.coordinator, 'confbridge_id'):
-            return self.coordinator.confbridge_id
-        return ""
+        return getattr(self.coordinator, 'confbridge_id', "")
 
     @property
     def icon(self):
@@ -113,12 +108,12 @@ class AsteriskConfbridgeIdSensor(CoordinatorEntity, SensorEntity):
         return "mdi:bridge"
 
 
-class AsteriskExtensionSensor(CoordinatorEntity, SensorEntity):
+class AsteriskExtensionSensor(SensorEntity):
     """Sensor for extension."""
 
     def __init__(self, coordinator, entry_id):
         """Initialize the sensor."""
-        super().__init__(coordinator)
+        self.coordinator = coordinator
         self._entry_id = entry_id
 
         self._attr_name = "Asterisk Doorbell Extension"
@@ -142,9 +137,7 @@ class AsteriskExtensionSensor(CoordinatorEntity, SensorEntity):
     @property
     def native_value(self):
         """Return the extension."""
-        if hasattr(self.coordinator, 'extension'):
-            return self.coordinator.extension
-        return ""
+        return getattr(self.coordinator, 'extension', "")
 
     @property
     def icon(self):
