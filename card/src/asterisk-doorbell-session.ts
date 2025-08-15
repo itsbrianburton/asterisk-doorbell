@@ -386,10 +386,12 @@ export class AsteriskDoorbellSession extends EventTarget {
      * This needs to match your extensions.conf configuration
      */
     private _getAdminExtensionForConfbridge(): string {
-        if (!this._hass || !this._entityExtension)
-            return '';
+        if (this._hass && this._entityExtension) {
+            if (this._hass.states[this._entityExtension])
+                return this._hass.states[this._entityExtension].state;
+        }
 
-        return this._hass.states[this._entityExtension];
+        return '';
     }
 
     /**
