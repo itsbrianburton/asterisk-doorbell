@@ -1,6 +1,7 @@
 """Services for the Asterisk Doorbell integration."""
 import logging
 import voluptuous as vol
+import traceback
 
 from homeassistant.core import HomeAssistant, ServiceCall, callback
 from homeassistant.helpers import config_validation as cv
@@ -38,98 +39,185 @@ TERMINATE_SCHEMA = vol.Schema(
 async def async_setup_services(hass: HomeAssistant) -> None:
     """Set up services for the Asterisk Doorbell integration."""
 
+    _LOGGER.info("Setting up Asterisk Doorbell services...")
+    _LOGGER.debug("DOMAIN: %s", DOMAIN)
+    _LOGGER.debug("Available data keys: %s", list(hass.data.get(DOMAIN, {}).keys()))
+
     @callback
     def handle_call(call: ServiceCall) -> None:
         """Handle the call service call when someone joins a confbridge."""
-        confbridge_id = call.data["confbridge"]
-        extension = call.data["extension"]
+        try:
+            _LOGGER.info("=== CALL SERVICE HANDLER STARTED ===")
+            _LOGGER.debug("Raw service call object: %s", call)
+            _LOGGER.debug("Service call data type: %s", type(call.data))
+            _LOGGER.debug("Service call data: %s", call.data)
+            _LOGGER.debug("Service call context: %s", call.context)
 
-        _LOGGER.debug("Call notification: extension %s joined confbridge %s", extension, confbridge_id)
+            # Check if required fields exist
+            if "confbridge" not in call.data:
+                _LOGGER.error("Missing 'confbridge' field in service call data")
+                return
+            if "extension" not in call.data:
+                _LOGGER.error("Missing 'extension' field in service call data")
+                return
 
-        # Update all coordinators in the correct order to avoid race conditions
-        # 1. Set confbridge_id first
-        # 2. Set extension second
-        # 3. Set call_status last (automations trigger on this)
-        for entry_id, coordinator in hass.data[DOMAIN].items():
-            coordinator.confbridge_id = confbridge_id
-            coordinator.async_update_listeners()  # Update confbridge_id sensor
+            confbridge_id = call.data["confbridge"]
+            extension = call.data["extension"]
 
-            coordinator.extension = extension
-            coordinator.async_update_listeners()  # Update extension sensor
+            _LOGGER.info("Extracted confbridge_id: '%s' (type: %s)", confbridge_id, type(confbridge_id))
+            _LOGGER.info("Extracted extension: '%s' (type: %s)", extension, type(extension))
 
-            coordinator.call_status = STATE_RINGING
-            coordinator.async_update_listeners()  # Update call_status sensor last
+            _LOGGER.debug("Call notification: extension %s joined confbridge %s", extension, confbridge_id)
 
-            _LOGGER.info("Updated state to ringing: confbridge=%s, extension=%s", confbridge_id, extension)
+            # Check if DOMAIN exists in hass.data
+            if DOMAIN not in hass.data:
+                _LOGGER.error("DOMAIN '%s' not found in hass.data", DOMAIN)
+                _LOGGER.debug("Available domains in hass.data: %s", list(hass.data.keys()))
+                return
+
+            coordinators = hass.data[DOMAIN]
+            _LOGGER.debug("Found %d coordinators", len(coordinators))
+
+            # Update all coordinators in the correct order to avoid race conditions
+            # 1. Set confbridge_id first
+            # 2. Set extension second
+            # 3. Set call_status last (automations trigger on this)
+            for entry_id, coordinator in coordinators.items():
+                _LOGGER.debug("Updating coordinator for entry_id: %s", entry_id)
+
+                coordinator.confbridge_id = confbridge_id
+                _LOGGER.debug("Set confbridge_id to: %s", coordinator.confbridge_id)
+                coordinator.async_update_listeners()  # Update confbridge_id sensor
+
+                coordinator.extension = extension
+                _LOGGER.debug("Set extension to: %s", coordinator.extension)
+                coordinator.async_update_listeners()  # Update extension sensor
+
+                coordinator.call_status = STATE_RINGING
+                _LOGGER.debug("Set call_status to: %s", coordinator.call_status)
+                coordinator.async_update_listeners()  # Update call_status sensor last
+
+                _LOGGER.info("Updated state to ringing: confbridge=%s, extension=%s", confbridge_id, extension)
+
+            _LOGGER.info("=== CALL SERVICE HANDLER COMPLETED ===")
+
+        except Exception as e:
+            _LOGGER.error("Exception in handle_call: %s", str(e))
+            _LOGGER.error("Traceback: %s", traceback.format_exc())
 
     @callback
     def handle_answered(call: ServiceCall) -> None:
         """Handle the answered service call when a call is answered."""
-        confbridge_id = call.data["confbridge"]
-        extension = call.data["extension"]
+        try:
+            _LOGGER.info("=== ANSWERED SERVICE HANDLER STARTED ===")
+            _LOGGER.debug("Raw service call object: %s", call)
+            _LOGGER.debug("Service call data: %s", call.data)
 
-        _LOGGER.debug("Answered notification: confbridge %s answered by extension %s", confbridge_id, extension)
+            confbridge_id = call.data["confbridge"]
+            extension = call.data["extension"]
 
-        # Update all coordinators in the correct order
-        for entry_id, coordinator in hass.data[DOMAIN].items():
-            coordinator.confbridge_id = confbridge_id
-            coordinator.async_update_listeners()  # Update confbridge_id sensor
+            _LOGGER.debug("Answered notification: confbridge %s answered by extension %s", confbridge_id, extension)
 
-            coordinator.extension = extension
-            coordinator.async_update_listeners()  # Update extension sensor
+            # Update all coordinators in the correct order
+            for entry_id, coordinator in hass.data[DOMAIN].items():
+                coordinator.confbridge_id = confbridge_id
+                coordinator.async_update_listeners()  # Update confbridge_id sensor
 
-            coordinator.call_status = STATE_ACTIVE
-            coordinator.async_update_listeners()  # Update call_status sensor last
+                coordinator.extension = extension
+                coordinator.async_update_listeners()  # Update extension sensor
 
-            _LOGGER.info("Updated state to active: confbridge=%s, extension=%s", confbridge_id, extension)
+                coordinator.call_status = STATE_ACTIVE
+                coordinator.async_update_listeners()  # Update call_status sensor last
+
+                _LOGGER.info("Updated state to active: confbridge=%s, extension=%s", confbridge_id, extension)
+
+            _LOGGER.info("=== ANSWERED SERVICE HANDLER COMPLETED ===")
+
+        except Exception as e:
+            _LOGGER.error("Exception in handle_answered: %s", str(e))
+            _LOGGER.error("Traceback: %s", traceback.format_exc())
 
     @callback
     def handle_terminate(call: ServiceCall) -> None:
         """Handle the terminate service call when a confbridge is ended."""
-        confbridge_id = call.data["confbridge"]
+        try:
+            _LOGGER.info("=== TERMINATE SERVICE HANDLER STARTED ===")
+            _LOGGER.debug("Raw service call object: %s", call)
+            _LOGGER.debug("Service call data: %s", call.data)
 
-        _LOGGER.debug("Terminate notification: confbridge %s ended", confbridge_id)
+            confbridge_id = call.data["confbridge"]
 
-        # Update all coordinators in the correct order
-        for entry_id, coordinator in hass.data[DOMAIN].items():
-            coordinator.confbridge_id = confbridge_id
-            coordinator.async_update_listeners()  # Update confbridge_id sensor
+            _LOGGER.debug("Terminate notification: confbridge %s ended", confbridge_id)
 
-            coordinator.extension = ""
-            coordinator.async_update_listeners()  # Update extension sensor
+            # Update all coordinators in the correct order
+            for entry_id, coordinator in hass.data[DOMAIN].items():
+                coordinator.confbridge_id = confbridge_id
+                coordinator.async_update_listeners()  # Update confbridge_id sensor
 
-            coordinator.call_status = STATE_INACTIVE
-            coordinator.async_update_listeners()  # Update call_status sensor last
+                coordinator.extension = ""
+                coordinator.async_update_listeners()  # Update extension sensor
 
-            _LOGGER.info("Updated state to inactive: confbridge=%s", confbridge_id)
+                coordinator.call_status = STATE_INACTIVE
+                coordinator.async_update_listeners()  # Update call_status sensor last
+
+                _LOGGER.info("Updated state to inactive: confbridge=%s", confbridge_id)
+
+            _LOGGER.info("=== TERMINATE SERVICE HANDLER COMPLETED ===")
+
+        except Exception as e:
+            _LOGGER.error("Exception in handle_terminate: %s", str(e))
+            _LOGGER.error("Traceback: %s", traceback.format_exc())
 
     # Register the services
-    hass.services.async_register(
-        DOMAIN,
-        SERVICE_CALL,
-        handle_call,
-        schema=CALL_SCHEMA,
-    )
+    _LOGGER.info("Registering service: %s.%s", DOMAIN, SERVICE_CALL)
+    try:
+        hass.services.async_register(
+            DOMAIN,
+            SERVICE_CALL,
+            handle_call,
+            schema=CALL_SCHEMA,
+        )
+        _LOGGER.info("Successfully registered %s.%s", DOMAIN, SERVICE_CALL)
+    except Exception as e:
+        _LOGGER.error("Failed to register %s.%s: %s", DOMAIN, SERVICE_CALL, str(e))
 
-    hass.services.async_register(
-        DOMAIN,
-        SERVICE_ANSWERED,
-        handle_answered,
-        schema=ANSWERED_SCHEMA,
-    )
+    _LOGGER.info("Registering service: %s.%s", DOMAIN, SERVICE_ANSWERED)
+    try:
+        hass.services.async_register(
+            DOMAIN,
+            SERVICE_ANSWERED,
+            handle_answered,
+            schema=ANSWERED_SCHEMA,
+        )
+        _LOGGER.info("Successfully registered %s.%s", DOMAIN, SERVICE_ANSWERED)
+    except Exception as e:
+        _LOGGER.error("Failed to register %s.%s: %s", DOMAIN, SERVICE_ANSWERED, str(e))
 
-    hass.services.async_register(
-        DOMAIN,
-        SERVICE_TERMINATE,
-        handle_terminate,
-        schema=TERMINATE_SCHEMA,
-    )
+    _LOGGER.info("Registering service: %s.%s", DOMAIN, SERVICE_TERMINATE)
+    try:
+        hass.services.async_register(
+            DOMAIN,
+            SERVICE_TERMINATE,
+            handle_terminate,
+            schema=TERMINATE_SCHEMA,
+        )
+        _LOGGER.info("Successfully registered %s.%s", DOMAIN, SERVICE_TERMINATE)
+    except Exception as e:
+        _LOGGER.error("Failed to register %s.%s: %s", DOMAIN, SERVICE_TERMINATE, str(e))
+
+    _LOGGER.info("All services registered successfully")
 
 
 async def async_unload_services(hass: HomeAssistant) -> None:
     """Unload Asterisk Doorbell services."""
+    _LOGGER.info("Unloading Asterisk Doorbell services...")
+
     services_to_remove = [SERVICE_CALL, SERVICE_ANSWERED, SERVICE_TERMINATE]
 
     for service in services_to_remove:
         if hass.services.has_service(DOMAIN, service):
+            _LOGGER.debug("Removing service: %s.%s", DOMAIN, service)
             hass.services.async_remove(DOMAIN, service)
+            _LOGGER.info("Successfully removed service: %s.%s", DOMAIN, service)
+        else:
+            _LOGGER.warning("Service %s.%s not found for removal", DOMAIN, service)

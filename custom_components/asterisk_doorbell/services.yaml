@@ -50,7 +50,7 @@ terminate:
     extension:
       name: Extension
       description: The extension that answered the call
-      required: true
+      required: false
       example: "9001"
       selector:
         text:
