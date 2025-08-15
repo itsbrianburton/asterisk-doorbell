@@ -89,6 +89,7 @@ export class AsteriskDoorbellSession extends EventTarget {
             this._settings = await this._hass.callWS({
                 type: "asterisk_doorbell/get_settings"
             });
+            this._log("Received settings from HA:", this._settings);
         } catch (e) {
             this._log("Failed to get settings, using defaults", "error");
             this._settings = {
@@ -101,10 +102,13 @@ export class AsteriskDoorbellSession extends EventTarget {
     private _initializeSIPConnection() {
         if (!this._settings.asterisk_host || !this._settings.websocket_port) {
             this._log("Missing SIP settings", "error");
+            this._log("Current settings:", this._settings);
             return;
         }
 
         const socketUrl = `wss://${this._settings.asterisk_host}:${this._settings.websocket_port}/ws`;
+        this._log(`Attempting to connect to Asterisk WebSocket: ${socketUrl}`);
+
         const socket = new WebSocketInterface(socketUrl);
 
         this._socket = new UA({
@@ -126,7 +130,13 @@ export class AsteriskDoorbellSession extends EventTarget {
             .on('registrationFailed', (e) => {
                 this._log("SIP registration failed: " + JSON.stringify(e), "error");
             })
-            .on('newRTCSession', (event: RTCSessionEvent) => this._handleNewRTCSession(event));
+            .on('newRTCSession', (event: RTCSessionEvent) => this._handleNewRTCSession(event))
+            .on('connected', () => {
+                this._log("SIP WebSocket connected to " + socketUrl);
+            })
+            .on('disconnected', () => {
+                this._log("SIP WebSocket disconnected", "error");
+            });
 
         this._socket.start();
     }

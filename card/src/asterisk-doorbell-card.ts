@@ -13,9 +13,9 @@ interface Config extends LovelaceCardConfig {
 
 export class AsteriskDoorbellCard extends LitElement {
     @property({ attribute: false }) public hass!: HomeAssistant;
-    @state() private _config: Config;
-    @state() private _header: string | typeof nothing | undefined;
-    @state() private _callState: string = 'idle';
+    @state() private _config: Config = {};
+    @state() private _header: string | typeof nothing;
+    @state() private _callState: string = 'inactive';
     @state() private _callStatusEntity: HassEntity | null = null;
     @state() private _confbridgeIdEntity: HassEntity | null = null;
     @state() private _extensionEntity: HassEntity | null = null;
@@ -34,22 +34,25 @@ export class AsteriskDoorbellCard extends LitElement {
         if (this._session) {
             this._session.addEventListener('video_stream_ready', (e: any) => {
                 this._videoVisible = true;
+                this.requestUpdate();
             });
 
             this._session.addEventListener('media_disconnected', () => {
                 this._videoVisible = false;
                 this._isMuted = false;
+                this.requestUpdate();
             });
         }
     }
 
     // This is called when the configuration changes
     setConfig(config: Config) {
-        this._config = config;
+        // Create a mutable copy of the config to avoid readonly errors
+        this._config = { ...config };
         this._header = config.header === "" ? nothing : config.header;
 
         // Auto-detect the three global sensors if not configured
-        if (!config.call_status_entity || !config.confbridge_id_entity || !config.extension_entity) {
+        if (!this._config.call_status_entity || !this._config.confbridge_id_entity || !this._config.extension_entity) {
             this._autoDetectSensors();
         }
     }
@@ -58,16 +61,22 @@ export class AsteriskDoorbellCard extends LitElement {
     private _autoDetectSensors() {
         if (!this.hass) return;
 
+        // Create a new config object to avoid modifying readonly properties
+        const newConfig = { ...this._config };
+
         // Look for the three global sensors
         Object.keys(this.hass.states).forEach(entityId => {
             if (entityId.includes('asterisk_doorbell_call_status')) {
-                this._config.call_status_entity = entityId;
+                newConfig.call_status_entity = entityId;
             } else if (entityId.includes('asterisk_doorbell_confbridge_id')) {
-                this._config.confbridge_id_entity = entityId;
+                newConfig.confbridge_id_entity = entityId;
             } else if (entityId.includes('asterisk_doorbell_extension')) {
-                this._config.extension_entity = entityId;
+                newConfig.extension_entity = entityId;
             }
         });
+
+        // Update the config
+        this._config = newConfig;
     }
 
     // When Home Assistant state changes
@@ -109,6 +118,7 @@ export class AsteriskDoorbellCard extends LitElement {
             this._callStatusEntity = this.hass.states[this._config.call_status_entity];
             if (this._callStatusEntity) {
                 this._callState = this._callStatusEntity.state;
+                console.log('Card: Call state updated to:', this._callState);
             }
         }
 
@@ -116,6 +126,7 @@ export class AsteriskDoorbellCard extends LitElement {
             this._confbridgeIdEntity = this.hass.states[this._config.confbridge_id_entity];
             if (this._confbridgeIdEntity) {
                 this._confbridgeId = this._confbridgeIdEntity.state;
+                console.log('Card: Confbridge ID updated to:', this._confbridgeId);
             }
         }
 
@@ -123,6 +134,7 @@ export class AsteriskDoorbellCard extends LitElement {
             this._extensionEntity = this.hass.states[this._config.extension_entity];
             if (this._extensionEntity) {
                 this._extension = this._extensionEntity.state;
+                console.log('Card: Extension updated to:', this._extension);
             }
         }
     }
@@ -133,6 +145,8 @@ export class AsteriskDoorbellCard extends LitElement {
             console.error('No confbridge ID available');
             return;
         }
+
+        console.log('Card: Answering call for confbridge:', this._confbridgeId);
 
         try {
             // Call admin extension directly to join confbridge
@@ -154,6 +168,8 @@ export class AsteriskDoorbellCard extends LitElement {
 
     // Hang up the call
     private async _handleHangup() {
+        console.log('Card: Hanging up call');
+
         try {
             if (this._session) {
                 await this._session.hangupCall();
@@ -191,6 +207,13 @@ export class AsteriskDoorbellCard extends LitElement {
         }
 
         const displayName = this._getDisplayName();
+
+        console.log('Card: Rendering with state:', {
+            callState: this._callState,
+            confbridgeId: this._confbridgeId,
+            extension: this._extension,
+            statusClass: statusClass
+        });
 
         return html`
             <ha-card header="${this._header || 'Doorbell'}">
@@ -244,6 +267,15 @@ export class AsteriskDoorbellCard extends LitElement {
                                 </ha-button>
                             ` : ''
                         }
+                    </div>
+                    
+                    <!-- Debug info (remove in production) -->
+                    <div style="margin-top: 16px; padding: 8px; background: var(--card-background-color); border-radius: 4px; font-size: 0.8rem; color: var(--secondary-text-color);">
+                        <strong>Debug:</strong><br>
+                        Call Status: ${this._callState}<br>
+                        Confbridge: ${this._confbridgeId}<br>
+                        Extension: ${this._extension}<br>
+                        Entities: ${this._config.call_status_entity ? '✓' : '✗'} ${this._config.confbridge_id_entity ? '✓' : '✗'} ${this._config.extension_entity ? '✓' : '✗'}
                     </div>
                 </div>
             </ha-card>

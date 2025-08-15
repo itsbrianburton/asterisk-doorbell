@@ -30,7 +30,7 @@ async def websocket_get_settings(
     """Handle get settings command."""
     _LOGGER.debug("WebSocket: Get settings")
 
-    # Initialize settings dict
+    # Initialize settings dict with correct defaults
     settings = {
         "asterisk_host": "",
         "websocket_port": 8089,
@@ -49,6 +49,8 @@ async def websocket_get_settings(
             "asterisk_host": entry_data.get("asterisk_host", ""),
             "websocket_port": entry_data.get("asterisk_websocket_port", 8089),
         })
+
+        _LOGGER.debug(f"WebSocket API returning settings: {settings}")
 
     connection.send_result(msg["id"], settings)
 
