@@ -21,7 +21,8 @@ def async_register_websocket_commands(hass: HomeAssistant) -> None:
 @websocket_api.websocket_command({
     vol.Required("type"): "asterisk_doorbell/get_settings"
 })
-async def websocket_get_settings(
+@callback
+def websocket_get_settings(
     hass: HomeAssistant,
     connection: websocket_api.ActiveConnection,
     msg: Dict[str, Any]
@@ -57,7 +58,8 @@ async def websocket_get_settings(
 @websocket_api.websocket_command({
     vol.Required("type"): "asterisk_doorbell/get_current_state"
 })
-async def websocket_get_current_state(
+@callback
+def websocket_get_current_state(
     hass: HomeAssistant,
     connection: websocket_api.ActiveConnection,
     msg: Dict[str, Any]
