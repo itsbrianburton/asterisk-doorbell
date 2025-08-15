@@ -34,17 +34,29 @@ async def async_setup_view(hass):
 
     add_extra_js_url(hass, f"/{FRONTEND_SCRIPT_URL}")
 
-    async_register_built_in_panel(
-        hass=hass,
-        component_name="custom",
-        sidebar_title=COMPONENT_NAME,
-        sidebar_icon="mdi:intercom",
-        frontend_url_path=SETTINGS_PANEL_URL,
-        require_admin=True,
-        config={
-            "_panel_custom": {
-                "name": "asterisk-doorbell-panel",
-                "js_url": f"/{SETTINGS_SCRIPT_URL}"
-            }
-        }
-    )
+    # Check if panel is already registered to prevent "Overwriting panel" error
+    if SETTINGS_PANEL_URL not in hass.data.get("frontend_panels", {}):
+        try:
+            async_register_built_in_panel(
+                hass=hass,
+                component_name="custom",
+                sidebar_title=COMPONENT_NAME,
+                sidebar_icon="mdi:intercom",
+                frontend_url_path=SETTINGS_PANEL_URL,
+                require_admin=True,
+                config={
+                    "_panel_custom": {
+                        "name": "asterisk-doorbell-panel",
+                        "js_url": f"/{SETTINGS_SCRIPT_URL}"
+                    }
+                }
+            )
+            _LOGGER.debug(f"Registered panel: {SETTINGS_PANEL_URL}")
+        except ValueError as e:
+            if "Overwriting panel" in str(e):
+                _LOGGER.debug(f"Panel {SETTINGS_PANEL_URL} already exists, skipping registration")
+            else:
+                _LOGGER.error(f"Error registering panel: {e}")
+                raise
+    else:
+        _LOGGER.debug(f"Panel {SETTINGS_PANEL_URL} already registered, skipping")

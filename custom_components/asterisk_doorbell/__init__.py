@@ -20,11 +20,14 @@ PLATFORMS = ["sensor"]
 
 async def async_setup(hass: HomeAssistant, config: Dict) -> bool:
     """Set up the Asterisk Doorbell integration."""
-    # Set up services
+    # Set up services (only once for all entries)
     await async_setup_services(hass)
 
-    # Register websocket commands
+    # Register websocket commands (only once for all entries)
     async_register_websocket_commands(hass)
+
+    # Set up view (only once for all entries)
+    await async_setup_view(hass)
 
     return True
 
@@ -36,8 +39,6 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     # Create simple coordinator (no confbridge configuration needed)
     coordinator = GlobalAsteriskCoordinator(hass)
-
-    await async_setup_view(hass)
 
     # Store the coordinator
     hass.data[DOMAIN][entry.entry_id] = coordinator
