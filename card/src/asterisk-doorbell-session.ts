@@ -39,6 +39,8 @@ export class AsteriskDoorbellSession extends EventTarget {
     private _localStream: MediaStream | null = null;
     private _remoteAudioElement: HTMLAudioElement | null = null;
     private _remoteVideoElement: HTMLVideoElement | null = null;
+    private _initializationAttempted: boolean = false;
+    private _entityExtension: string | undefined;
 
     constructor() {
         super();
@@ -47,18 +49,36 @@ export class AsteriskDoorbellSession extends EventTarget {
 
     private async _initializeWhenReady() {
         this._log("Starting initialization...");
-        await new Promise(resolve => setTimeout(resolve, 1000));
+        await new Promise(resolve => setTimeout(resolve, 2000)); // Wait longer for HA to be ready
         try {
             await this.initialize();
             this._log("Initialization completed successfully");
         } catch (e) {
             this._log("Initialization failed: " + e, "error");
-            this._log("Will retry in 5 seconds", "error");
-            setTimeout(() => this._initializeWhenReady(), 5000);
+            this._log("Will retry in 10 seconds", "error");
+            setTimeout(() => this._initializeWhenReady(), 10000);
         }
     }
 
+    private _autoDetectSensors() {
+        if (!this._hass) return;
+
+        // Look for the three global sensors
+        Object.keys(this._hass.states).forEach(entityId => {
+            if (entityId.includes('asterisk_doorbell_extension')) {
+                this._entityExtension = entityId;
+            }
+        });
+    }
+
     async initialize() {
+        if (this._initializationAttempted) {
+            this._log("Initialization already attempted, resetting...");
+            this._socket = null;
+            this._session = null;
+        }
+        this._initializationAttempted = true;
+
         this._log("Step 1: Waiting for Home Assistant...");
         const hassReady = await this.provideHass();
         if (!hassReady) {
@@ -71,6 +91,7 @@ export class AsteriskDoorbellSession extends EventTarget {
             this._log("Step 2: Initializing configuration...");
             await this._initializeConfig();
             this._log("Step 2: ✓ Configuration loaded");
+            this._log("Step 2: Settings:", this._settings);
 
             this._log("Step 3: Initializing media elements...");
             this._initializeMediaElements();
@@ -101,16 +122,26 @@ export class AsteriskDoorbellSession extends EventTarget {
 
     private async _initializeConfig() {
         try {
+            this._log("Attempting to get settings from Home Assistant...");
             this._settings = await this._hass.callWS({
                 type: "asterisk_doorbell/get_settings"
             });
-            this._log("Received settings from HA:", this._settings);
+            this._log("✓ Received settings from HA:", this._settings);
+
+            // Validate settings
+            if (!this._settings || !this._settings.asterisk_host || !this._settings.websocket_port) {
+                this._log("⚠️ Invalid settings received, using fallback", "warning");
+                throw new Error("Invalid settings from HA");
+            }
+
         } catch (e) {
-            this._log("Failed to get settings, using defaults", "error");
+            this._log("✗ Failed to get settings from HA: " + e, "error");
+            this._log("Using fallback settings", "warning");
             this._settings = {
                 asterisk_host: window.location.hostname,
                 websocket_port: 8089,
             };
+            this._log("Fallback settings:", this._settings);
         }
     }
 
@@ -121,11 +152,17 @@ export class AsteriskDoorbellSession extends EventTarget {
             return;
         }
 
-        const socketUrl = `wss://${this._settings.asterisk_host}:${this._settings.websocket_port}/ws`;
-        this._log(`Attempting to connect to Asterisk WebSocket: ${socketUrl}`);
+        // Use Home Assistant proxy instead of direct Asterisk connection
+        const haHost = window.location.hostname;
+        const haPort = window.location.port || (window.location.protocol === 'https:' ? 443 : 80);
+        const haProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+        const proxyUrl = `${haProtocol}//${haHost}:${haPort}/api/asterisk_doorbell/ws`;
+
+        this._log(`Using HA WebSocket proxy: ${proxyUrl}`);
+        this._log(`Proxy will forward to: ws://${this._settings.asterisk_host}:${this._settings.websocket_port}/ws`);
 
         try {
-            const socket = new WebSocketInterface(socketUrl);
+            const socket = new WebSocketInterface(proxyUrl);
 
             this._socket = new UA({
                 sockets: [socket],
@@ -140,7 +177,7 @@ export class AsteriskDoorbellSession extends EventTarget {
 
             this._socket
                 .on('registered', () => {
-                    this._log("✓ SIP client registered successfully");
+                    this._log("✓ SIP client registered successfully via HA proxy");
                     this.dispatchEvent(new CustomEvent('sip_registered'));
                 })
                 .on('registrationFailed', (e) => {
@@ -148,18 +185,18 @@ export class AsteriskDoorbellSession extends EventTarget {
                 })
                 .on('newRTCSession', (event: RTCSessionEvent) => this._handleNewRTCSession(event))
                 .on('connected', () => {
-                    this._log("✓ SIP WebSocket connected to " + socketUrl);
+                    this._log("✓ SIP WebSocket connected via HA proxy to " + proxyUrl);
                 })
                 .on('disconnected', () => {
-                    this._log("✗ SIP WebSocket disconnected", "error");
+                    this._log("✗ SIP WebSocket disconnected from HA proxy", "error");
                 });
 
-            this._log("Starting SIP client...");
+            this._log("Starting SIP client with HA proxy...");
             this._socket.start();
             this._log("SIP client start() called");
 
         } catch (error) {
-            this._log("Error creating SIP client: " + error, "error");
+            this._log("Error creating SIP client with HA proxy: " + error, "error");
             this._socket = null;
         }
     }
@@ -261,7 +298,7 @@ export class AsteriskDoorbellSession extends EventTarget {
 
         try {
             // Get the admin extension for this confbridge
-            const adminExtension = this._getAdminExtensionForConfbridge(confbridgeId);
+            const adminExtension = this._getAdminExtensionForConfbridge();
 
             // Make SIP call to the admin extension - this triggers doorbell-admin macro
             const callTarget = `sip:${adminExtension}@${this._settings.asterisk_host}`;
@@ -348,25 +385,11 @@ export class AsteriskDoorbellSession extends EventTarget {
      * Map confbridge ID to admin extension based on your numbering scheme
      * This needs to match your extensions.conf configuration
      */
-    private _getAdminExtensionForConfbridge(confbridgeId: string): string {
-        // Default mapping - you may need to customize this based on your setup
-        const mapping: { [key: string]: string } = {
-            'doorbell_front_door': '9001',
-            'doorbell_back_door': '9101',
-            'doorbell_side_door': '9201',
-            'doorbell_garage': '9301',
-            'doorbell_office': '9401',
-        };
+    private _getAdminExtensionForConfbridge(): string {
+        if (!this._hass || !this._entityExtension)
+            return '';
 
-        // Return mapped extension or calculate based on pattern
-        if (mapping[confbridgeId]) {
-            return mapping[confbridgeId];
-        }
-
-        // Fallback: try to extract number from confbridge name
-        // This is a basic example - customize for your naming scheme
-        this._log(`No mapping found for confbridge ${confbridgeId}, using default admin extension 9001`, "warning");
-        return "9001";
+        return this._hass.states[this._entityExtension];
     }
 
     /**
@@ -379,6 +402,7 @@ export class AsteriskDoorbellSession extends EventTarget {
             sessionExists: !!this._session,
             settings: this._settings,
             hassConnected: !!this._hass,
+            initializationAttempted: this._initializationAttempted,
         };
     }
 
@@ -400,17 +424,22 @@ export class AsteriskDoorbellSession extends EventTarget {
     async provideHass() {
         await customElements.whenDefined("home-assistant");
         let attempts = 0;
-        const maxAttempts = 50;
+        const maxAttempts = 100; // Increase attempts
 
         while (attempts < maxAttempts) {
             const query = document.querySelector("home-assistant");
             if (query && (query as any).hass) {
                 this._hass = (query as any).hass;
+                this._log(`Found Home Assistant after ${attempts} attempts`);
+
+                this._autoDetectSensors();
+
                 return true;
             }
             await new Promise(r => setTimeout(r, 200));
             attempts++;
         }
+        this._log(`Failed to find Home Assistant after ${maxAttempts} attempts`, "error");
         return false;
     }
 

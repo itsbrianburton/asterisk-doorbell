@@ -12,6 +12,7 @@ from .const import DOMAIN, STATE_INACTIVE
 from .services import async_setup_services, async_unload_services
 from .view import async_setup_view
 from .websocket_api import async_register_websocket_commands
+from .websocket_proxy import setup_websocket_proxy
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -28,6 +29,9 @@ async def async_setup(hass: HomeAssistant, config: Dict) -> bool:
 
     # Set up view (only once for all entries)
     await async_setup_view(hass)
+
+    # Set up WebSocket proxy (only once for all entries)
+    setup_websocket_proxy(hass)
 
     return True
 
