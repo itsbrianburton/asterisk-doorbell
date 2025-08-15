@@ -30,6 +30,7 @@ ANSWERED_SCHEMA = vol.Schema(
 TERMINATE_SCHEMA = vol.Schema(
     {
         vol.Required("confbridge"): cv.string,
+        vol.Optional("extension", default=""): cv.string,  # Make extension optional with default
     }
 )
 

@@ -13,8 +13,8 @@ interface Config extends LovelaceCardConfig {
 
 export class AsteriskDoorbellCard extends LitElement {
     @property({ attribute: false }) public hass!: HomeAssistant;
-    @state() private _config: Config = {};
-    @state() private _header: string | typeof nothing;
+    @state() private _config: Config = {} as Config;
+    @state() private _header: string | typeof nothing | undefined;
     @state() private _callState: string = 'inactive';
     @state() private _callStatusEntity: HassEntity | null = null;
     @state() private _confbridgeIdEntity: HassEntity | null = null;

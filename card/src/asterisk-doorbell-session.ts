@@ -430,7 +430,7 @@ export class AsteriskDoorbellSession extends EventTarget {
         return 'ready';
     }
 
-    private _log(msg: any, type: string = "debug") {
+    private _log(msg: any, type: string | object = "debug") {
         const prefix = "[ASTERISK_DOORBELL_SESSION]";
         if (type === "debug" && this._debug) {
             console.debug(prefix, msg);

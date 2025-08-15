@@ -47,3 +47,10 @@ terminate:
       example: "doorbell_front_door"
       selector:
         text:
+    extension:
+      name: Extension
+      description: The extension that answered the call
+      required: true
+      example: "9001"
+      selector:
+        text:
