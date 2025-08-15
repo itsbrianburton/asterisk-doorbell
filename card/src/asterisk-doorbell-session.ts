@@ -387,8 +387,10 @@ export class AsteriskDoorbellSession extends EventTarget {
      */
     private _getAdminExtensionForConfbridge(): string {
         if (this._hass && this._entityExtension) {
-            if (this._hass.states[this._entityExtension])
+            if (this._hass.states[this._entityExtension]) {
+                this._log("State:", this._hass.states[this._entityExtension]);
                 return this._hass.states[this._entityExtension].state;
+            }
         }
 
         return '';
