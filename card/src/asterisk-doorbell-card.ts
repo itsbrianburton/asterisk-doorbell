@@ -28,6 +28,7 @@ export class AsteriskDoorbellCard extends LitElement {
     @state() private _extension: string = '';
     @state() private _isMuted: boolean = false;
     @state() private _videoVisible: boolean = false;
+    @state() private _isConnecting: boolean = false;
 
     // SIP/WebRTC properties
     private _socket: UA | null = null;
@@ -257,6 +258,7 @@ export class AsteriskDoorbellCard extends LitElement {
         this._session = null;
         this._videoVisible = false;
         this._isMuted = false;
+        this._isConnecting = false;
         this.requestUpdate();
     }
 
@@ -356,18 +358,26 @@ export class AsteriskDoorbellCard extends LitElement {
 
         console.log('Card: Answering call for confbridge:', this._confbridgeId);
 
+        // Set loading state
+        this._isConnecting = true;
+        this.requestUpdate();
+
         try {
             if (!this._socket) {
                 console.error('SIP client not initialized. Attempting initialization...');
                 await this._initializeSIP();
                 if (!this._socket) {
                     console.error('SIP initialization failed');
+                    this._isConnecting = false;
+                    this.requestUpdate();
                     return;
                 }
             }
 
             if (!this._socket.isRegistered()) {
                 console.error('SIP client not registered');
+                this._isConnecting = false;
+                this.requestUpdate();
                 return;
             }
 
@@ -376,8 +386,39 @@ export class AsteriskDoorbellCard extends LitElement {
 
             this._session = this._socket.call(callTarget, this._callConfig);
 
+            // Set up session event handlers for this specific session
+            this._session.on('connecting', () => {
+                this._log("Call connecting...");
+            });
+
+            this._session.on('progress', () => {
+                this._log("Call in progress...");
+            });
+
+            this._session.on('accepted', () => {
+                this._log("Call accepted");
+                this._isConnecting = false;
+                this.requestUpdate();
+            });
+
+            this._session.on('failed', () => {
+                this._log("Call failed", "error");
+                this._isConnecting = false;
+                this.requestUpdate();
+            });
+
+            // Stop loading after a few seconds regardless (fallback)
+            setTimeout(() => {
+                if (this._isConnecting) {
+                    this._isConnecting = false;
+                    this.requestUpdate();
+                }
+            }, 10000);
+
         } catch (error) {
             console.error('Failed to answer call:', error);
+            this._isConnecting = false;
+            this.requestUpdate();
         }
     }
 
@@ -458,7 +499,8 @@ export class AsteriskDoorbellCard extends LitElement {
             confbridgeId: this._confbridgeId,
             extension: this._extension,
             videoVisible: this._videoVisible,
-            isMuted: this._isMuted
+            isMuted: this._isMuted,
+            isConnecting: this._isConnecting
         };
     }
 
@@ -552,7 +594,9 @@ export class AsteriskDoorbellCard extends LitElement {
                         Confbridge: ${this._confbridgeId}<br>
                         Extension: ${this._extension}<br>
                         Entities: ${this._config.call_status_entity ? '✓' : '✗'} ${this._config.confbridge_id_entity ? '✓' : '✗'} ${this._config.extension_entity ? '✓' : '✗'}<br>
-                        SIP Status: ${sipStatus}
+                        SIP Status: ${sipStatus}<br>
+                        Has Session: ${!!this._session ? '✓' : '✗'}<br>
+                        Connecting: ${this._isConnecting ? '✓' : '✗'}
                     </div>
                 </div>
             </ha-card>
@@ -616,6 +660,21 @@ export class AsteriskDoorbellCard extends LitElement {
                     justify-content: center;
                     gap: 12px;
                     width: 100%;
+                }
+                
+                .connecting-message {
+                    display: flex;
+                    flex-direction: column;
+                    align-items: center;
+                    gap: 8px;
+                    padding: 16px;
+                    color: var(--primary-color);
+                }
+                
+                .connecting-message p {
+                    margin: 0;
+                    font-size: 0.9rem;
+                    color: var(--secondary-text-color);
                 }
                 
                 ha-button {
@@ -683,5 +742,3 @@ export class AsteriskDoorbellCard extends LitElement {
         ];
     }
 }
-
-customElements.define("asterisk-doorbell-card", AsteriskDoorbellCard);
