@@ -1,3 +1,8 @@
+// @ts-ignore
+import { UA, WebSocketInterface } from 'jssip';
+import { RTCSessionEvent } from 'jssip/lib/UA';
+import { IncomingEvent, OutgoingEvent, RTCSession } from "jssip/lib/RTCSession";
+
 import { html, LitElement, nothing, css } from 'lit';
 import { property, state } from 'lit/decorators';
 
@@ -24,47 +29,252 @@ export class AsteriskDoorbellCard extends LitElement {
     @state() private _isMuted: boolean = false;
     @state() private _videoVisible: boolean = false;
 
-    private _session: any = {};
+    // SIP/WebRTC properties
+    private _socket: UA | null = null;
+    private _session: RTCSession | null = null;
+    private _settings: any = {};
+    private _localStream: MediaStream | null = null;
+    private _remoteAudioElement: HTMLAudioElement | null = null;
+    private _remoteVideoElement: HTMLVideoElement | null = null;
+    private _initializationAttempted: boolean = false;
+    private _callConfig: any = {
+        mediaConstraints: {
+            audio: true,
+            video: true
+        },
+        rtcOfferConstraints: {
+            offerToReceiveAudio: true,
+            offerToReceiveVideo: true
+        }
+    };
 
     constructor() {
         super();
-        this._session = (window as any).asterisk_doorbell;
+        this._initializeSIPWhenReady();
+    }
 
-        // Listen for WebRTC events
-        if (this._session) {
-            this._session.addEventListener('video_stream_ready', (e: any) => {
-                this._videoVisible = true;
-                this.requestUpdate();
-            });
+    private async _initializeSIPWhenReady() {
+        // Wait for the card to be ready and hass to be available
+        await this.updateComplete;
+        await new Promise(resolve => setTimeout(resolve, 2000));
 
-            this._session.addEventListener('media_disconnected', () => {
-                this._videoVisible = false;
-                this._isMuted = false;
-                this.requestUpdate();
-            });
+        try {
+            await this._initializeSIP();
+            this._log("SIP initialization completed successfully");
+        } catch (e) {
+            this._log("SIP initialization failed: " + e, "error");
+            this._log("Will retry in 10 seconds", "error");
+            setTimeout(() => this._initializeSIPWhenReady(), 10000);
         }
+    }
+
+    private async _initializeSIP() {
+        if (this._initializationAttempted) {
+            this._log("SIP initialization already attempted, resetting...");
+            this._socket = null;
+            this._session = null;
+        }
+        this._initializationAttempted = true;
+
+        if (!this.hass) {
+            throw new Error("Home Assistant not available");
+        }
+
+        try {
+            this._log("Step 1: Initializing configuration...");
+            await this._initializeConfig();
+            this._log("Step 1: ✓ Configuration loaded");
+
+            this._log("Step 2: Initializing media elements...");
+            this._initializeMediaElements();
+            this._log("Step 2: ✓ Media elements ready");
+
+            this._log("Step 3: Initializing SIP connection...");
+            this._initializeSIPConnection();
+            this._log("Step 3: ✓ SIP connection initiated");
+
+        } catch (e) {
+            this._log("Error during SIP initialization: " + e, "error");
+            throw e;
+        }
+    }
+
+    private _initializeMediaElements() {
+        // Create audio element for remote audio
+        this._remoteAudioElement = document.createElement('audio');
+        this._remoteAudioElement.autoplay = true;
+        document.body.appendChild(this._remoteAudioElement);
+
+        // Create video element for remote video (doorbell camera)
+        this._remoteVideoElement = document.createElement('video');
+        this._remoteVideoElement.autoplay = true;
+        this._remoteVideoElement.style.display = 'none';
+        document.body.appendChild(this._remoteVideoElement);
+    }
+
+    private async _initializeConfig() {
+        try {
+            this._log("Attempting to get settings from Home Assistant...");
+            this._settings = await this.hass.callWS({
+                type: "asterisk_doorbell/get_settings"
+            });
+            this._log("✓ Received settings from HA:", this._settings);
+
+            if (!this._settings || !this._settings.asterisk_host || !this._settings.websocket_port) {
+                this._log("⚠️ Invalid settings received, using fallback", "warning");
+                throw new Error("Invalid settings from HA");
+            }
+
+        } catch (e) {
+            this._log("✗ Failed to get settings from HA: " + e, "error");
+            this._log("Using fallback settings", "warning");
+            this._settings = {
+                asterisk_host: window.location.hostname,
+                websocket_port: 8089,
+            };
+            this._log("Fallback settings:", this._settings);
+        }
+    }
+
+    private _initializeSIPConnection() {
+        if (!this._settings.asterisk_host || !this._settings.websocket_port) {
+            this._log("Missing SIP settings", "error");
+            return;
+        }
+
+        const haHost = window.location.hostname;
+        const haPort = window.location.port || (window.location.protocol === 'https:' ? 443 : 80);
+        const haProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+        const proxyUrl = `${haProtocol}//${haHost}:${haPort}/api/asterisk_doorbell/ws`;
+
+        this._log(`Using HA WebSocket proxy: ${proxyUrl}`);
+
+        try {
+            const socket = new WebSocketInterface(proxyUrl);
+
+            this._socket = new UA({
+                sockets: [socket],
+                uri: `sip:homeassistant@${this._settings.asterisk_host}`,
+                authorization_user: "homeassistant",
+                password: "",
+                register: true,
+                register_expires: 300,
+                session_timers: false,
+                user_agent: 'Asterisk Doorbell HA'
+            });
+
+            this._socket
+                .on('registered', () => {
+                    this._log("✓ SIP client registered successfully");
+                    this.requestUpdate();
+                })
+                .on('registrationFailed', (e) => {
+                    this._log("✗ SIP registration failed: " + JSON.stringify(e), "error");
+                })
+                .on('newRTCSession', (event: RTCSessionEvent) => this._handleNewRTCSession(event))
+                .on('connected', () => {
+                    this._log("✓ SIP WebSocket connected");
+                })
+                .on('disconnected', () => {
+                    this._log("✗ SIP WebSocket disconnected", "error");
+                });
+
+            this._socket.start();
+
+        } catch (error) {
+            this._log("Error creating SIP client: " + error, "error");
+            this._socket = null;
+        }
+    }
+
+    private _handleNewRTCSession(event: RTCSessionEvent) {
+        if (this._session) {
+            this._log("Already have active session, rejecting new one");
+            event.session.terminate();
+            return;
+        }
+
+        this._session = event.session;
+
+        this._session
+            .on('accepted', () => {
+                this._log("WebRTC session accepted - audio/video connected");
+            })
+            .on('ended', () => {
+                this._log("WebRTC session ended");
+                this._cleanupSession();
+            })
+            .on('failed', (e) => {
+                this._log("WebRTC session failed: " + e.cause, "error");
+                this._cleanupSession();
+            })
+            .on('peerconnection', (e) => {
+                const peerconnection = e.peerconnection;
+
+                peerconnection.ontrack = (event) => {
+                    if (event.streams && event.streams[0]) {
+                        const stream = event.streams[0];
+                        const videoTracks = stream.getVideoTracks();
+                        const audioTracks = stream.getAudioTracks();
+
+                        if (videoTracks.length > 0 && this._remoteVideoElement) {
+                            this._remoteVideoElement.srcObject = stream;
+                            this._log("Video stream connected");
+                            this._videoVisible = true;
+                            this.requestUpdate();
+                        }
+
+                        if (audioTracks.length > 0 && this._remoteAudioElement) {
+                            this._remoteAudioElement.srcObject = stream;
+                            this._log("Audio stream connected");
+                        }
+                    }
+                };
+
+                const senders = peerconnection.getSenders();
+                const audioSender = senders.find(s => s.track && s.track.kind === 'audio');
+                if (audioSender && audioSender.track) {
+                    this._localStream = new MediaStream([audioSender.track]);
+                }
+            });
+    }
+
+    private _cleanupSession() {
+        if (this._localStream) {
+            this._localStream.getTracks().forEach(track => track.stop());
+            this._localStream = null;
+        }
+
+        if (this._remoteAudioElement) {
+            this._remoteAudioElement.srcObject = null;
+        }
+
+        if (this._remoteVideoElement) {
+            this._remoteVideoElement.srcObject = null;
+            this._remoteVideoElement.style.display = 'none';
+        }
+
+        this._session = null;
+        this._videoVisible = false;
+        this._isMuted = false;
+        this.requestUpdate();
     }
 
     // This is called when the configuration changes
     setConfig(config: Config) {
-        // Create a mutable copy of the config to avoid readonly errors
         this._config = { ...config };
         this._header = config.header === "" ? nothing : config.header;
 
-        // Auto-detect the three global sensors if not configured
         if (!this._config.call_status_entity || !this._config.confbridge_id_entity || !this._config.extension_entity) {
             this._autoDetectSensors();
         }
     }
 
-    // Auto-detect the three global sensors
     private _autoDetectSensors() {
         if (!this.hass) return;
 
-        // Create a new config object to avoid modifying readonly properties
         const newConfig = { ...this._config };
 
-        // Look for the three global sensors
         Object.keys(this.hass.states).forEach(entityId => {
             if (entityId.includes('asterisk_doorbell_call_status')) {
                 newConfig.call_status_entity = entityId;
@@ -75,45 +285,39 @@ export class AsteriskDoorbellCard extends LitElement {
             }
         });
 
-        // Update the config
         this._config = newConfig;
     }
 
-    // When Home Assistant state changes
     updated(changedProps: any) {
         if (changedProps.has('hass') && this._config) {
             this._updateState();
         }
 
-        // Handle video element placement
-        if (this._videoVisible && this._session) {
+        if (this._videoVisible) {
             this._placeVideoElement();
         }
     }
 
     private _placeVideoElement() {
         const videoContainer = this.shadowRoot?.querySelector('#doorbell-video');
-        const videoElement = this._session?.getVideoElement();
+        const videoElement = this._remoteVideoElement;
 
         if (videoContainer && videoElement && !videoContainer.contains(videoElement)) {
             videoElement.style.width = '100%';
             videoElement.style.height = 'auto';
             videoElement.style.maxHeight = '300px';
+            videoElement.style.display = 'block';
             videoContainer.appendChild(videoElement);
-            this._session.setVideoVisible(true);
         }
     }
 
-    // Update internal state based on the three global sensors
     private _updateState() {
         if (!this.hass) return;
 
-        // Auto-detect sensors if not configured
         if (!this._config.call_status_entity || !this._config.confbridge_id_entity || !this._config.extension_entity) {
             this._autoDetectSensors();
         }
 
-        // Get the three sensor entities
         if (this._config.call_status_entity) {
             this._callStatusEntity = this.hass.states[this._config.call_status_entity];
             if (this._callStatusEntity) {
@@ -139,67 +343,80 @@ export class AsteriskDoorbellCard extends LitElement {
         }
     }
 
-    // Answer the call - call the admin extension directly via JSSIP
     private async _handleAnswer() {
         if (!this._confbridgeId) {
             console.error('No confbridge ID available');
             return;
         }
 
+        if (!this._extension) {
+            console.error('No extension available');
+            return;
+        }
+
         console.log('Card: Answering call for confbridge:', this._confbridgeId);
 
         try {
-            // Check session status first
-            if (this._session) {
-                const diagnostics = this._session.getDiagnosticInfo();
-                console.log('Session diagnostic info:', diagnostics);
-
-                if (!diagnostics.socketExists) {
-                    console.error('SIP client not initialized. Attempting manual initialization...');
-                    const success = await this._session.manualInitialize();
-                    if (!success) {
-                        console.error('Manual initialization failed');
-                        return;
-                    }
+            if (!this._socket) {
+                console.error('SIP client not initialized. Attempting initialization...');
+                await this._initializeSIP();
+                if (!this._socket) {
+                    console.error('SIP initialization failed');
+                    return;
                 }
             }
 
-            // Call admin extension directly to join confbridge
-            if (this._session) {
-                await this._session.answerCall(this._confbridgeId);
+            if (!this._socket.isRegistered()) {
+                console.error('SIP client not registered');
+                return;
             }
+
+            const callTarget = `sip:${this._extension}@${this._settings.asterisk_host}`;
+            this._log(`Answering call by calling admin extension: ${callTarget}`);
+
+            this._session = this._socket.call(callTarget, this._callConfig);
+
         } catch (error) {
             console.error('Failed to answer call:', error);
         }
     }
 
-    // Toggle microphone mute
     private async _handleMute() {
-        if (!this._session) return;
-
-        this._isMuted = !this._isMuted;
-        await this._session.toggleMute(this._isMuted);
-    }
-
-    // Hang up the call
-    private async _handleHangup() {
-        console.log('Card: Hanging up call');
+        if (!this._session) {
+            this._log("No active session to mute", "error");
+            return;
+        }
 
         try {
-            if (this._session) {
-                await this._session.hangupCall();
+            this._isMuted = !this._isMuted;
+
+            if (this._isMuted) {
+                await this._session.mute({ audio: true, video: false });
+            } else {
+                await this._session.unmute({ audio: true, video: false });
             }
-        } catch (error) {
-            console.error('Failed to hang up call:', error);
+
+            this.requestUpdate();
+        } catch (e) {
+            this._log("Error toggling mute: " + e, "error");
         }
     }
 
-    // Get display name for the confbridge
+    private async _handleHangup() {
+        console.log('Card: Hanging up call');
+
+        if (this._session) {
+            try {
+                this._session.terminate();
+            } catch (error) {
+                console.error('Failed to hang up call:', error);
+            }
+        }
+    }
+
     private _getDisplayName(): string {
         if (!this._confbridgeId) return 'Doorbell';
 
-        // Convert confbridge ID to display name
-        // e.g., "doorbell_front_door" -> "Front Door"
         return this._confbridgeId
             .replace('doorbell_', '')
             .split('_')
@@ -207,13 +424,63 @@ export class AsteriskDoorbellCard extends LitElement {
             .join(' ');
     }
 
-    // Card rendering
+    private _getSIPStatus(): string {
+        if (!this._socket) return 'not_initialized';
+        if (!this._socket.isRegistered()) return 'not_registered';
+        return 'ready';
+    }
+
+    private _log(msg: any, type: string = "debug") {
+        const prefix = "[ASTERISK_DOORBELL_CARD]";
+        if (type === "debug") {
+            console.debug(prefix, msg);
+        } else if (type === "error") {
+            console.error(prefix, msg);
+        } else if (type === "warning") {
+            console.warn(prefix, msg);
+        }
+    }
+
+    // Public debug methods for external access
+    public getSIPStatus(): string {
+        return this._getSIPStatus();
+    }
+
+    public getDiagnosticInfo() {
+        return {
+            socketExists: !!this._socket,
+            socketStatus: this._socket ? (this._socket.isRegistered() ? 'registered' : 'not registered') : 'null',
+            sessionExists: !!this._session,
+            settings: this._settings,
+            hassConnected: !!this.hass,
+            initializationAttempted: this._initializationAttempted,
+            callState: this._callState,
+            confbridgeId: this._confbridgeId,
+            extension: this._extension,
+            videoVisible: this._videoVisible,
+            isMuted: this._isMuted
+        };
+    }
+
+    public isReady(): boolean {
+        return !!(this._socket && this._socket.isRegistered());
+    }
+
+    public async manualInitialize(): Promise<boolean> {
+        try {
+            await this._initializeSIP();
+            return true;
+        } catch (e) {
+            this._log("Manual initialization failed: " + e, "error");
+            return false;
+        }
+    }
+
     render() {
         if (!this.hass || !this._config) {
             return html``;
         }
 
-        // Determine the card status styling
         let statusClass = 'status-inactive';
         if (this._callState === 'active') {
             statusClass = 'status-active';
@@ -222,13 +489,7 @@ export class AsteriskDoorbellCard extends LitElement {
         }
 
         const displayName = this._getDisplayName();
-
-        console.log('Card: Rendering with state:', {
-            callState: this._callState,
-            confbridgeId: this._confbridgeId,
-            extension: this._extension,
-            statusClass: statusClass
-        });
+        const sipStatus = this._getSIPStatus();
 
         return html`
             <ha-card header="${this._header || 'Doorbell'}">
@@ -291,7 +552,7 @@ export class AsteriskDoorbellCard extends LitElement {
                         Confbridge: ${this._confbridgeId}<br>
                         Extension: ${this._extension}<br>
                         Entities: ${this._config.call_status_entity ? '✓' : '✗'} ${this._config.confbridge_id_entity ? '✓' : '✗'} ${this._config.extension_entity ? '✓' : '✗'}<br>
-                        SIP Status: ${this._session ? (this._session.getDiagnosticInfo ? JSON.stringify(this._session.getDiagnosticInfo()) : 'No diagnostics') : 'No session'}
+                        SIP Status: ${sipStatus}
                     </div>
                 </div>
             </ha-card>
@@ -423,5 +684,4 @@ export class AsteriskDoorbellCard extends LitElement {
     }
 }
 
-// Register the card
 customElements.define("asterisk-doorbell-card", AsteriskDoorbellCard);
