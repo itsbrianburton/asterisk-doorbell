@@ -561,7 +561,7 @@ export class AsteriskDoorbellCard extends LitElement {
                     }
                     
                     <div class="button-container">
-                        ${this._callState === 'ringing' ? 
+                        ${this._callState === 'ringing' && !this._session && !this._isConnecting ? 
                             html`
                                 <ha-button @click="${this._handleAnswer}" class="answer">
                                     <ha-icon icon="mdi:phone"></ha-icon> Answer
@@ -569,7 +569,16 @@ export class AsteriskDoorbellCard extends LitElement {
                             ` : ''
                         }
                         
-                        ${this._callState === 'active' ? 
+                        ${this._isConnecting ? 
+                            html`
+                                <div class="connecting-message">
+                                    <ha-circular-progress indeterminate></ha-circular-progress>
+                                    <p>Connecting to call...</p>
+                                </div>
+                            ` : ''
+                        }
+                        
+                        ${this._session && this._callState === 'active' ? 
                             html`
                                 <ha-button @click="${this._handleMute}" class="${this._isMuted ? 'muted' : 'unmuted'}">
                                     <ha-icon icon="${this._isMuted ? 'mdi:microphone-off' : 'mdi:microphone'}"></ha-icon>
@@ -578,7 +587,7 @@ export class AsteriskDoorbellCard extends LitElement {
                             ` : ''
                         }
                         
-                        ${this._callState !== 'inactive' ? 
+                        ${this._session && this._callState !== 'inactive' ? 
                             html`
                                 <ha-button @click="${this._handleHangup}" class="hangup">
                                     <ha-icon icon="mdi:phone-hangup"></ha-icon> Hang Up

@@ -34,20 +34,27 @@ let e;function t(e,t,n,r){Object.defineProperty(e,t,{get:n,set:r,enumerable:!0,c
                         `}
                     
                     <div class="button-container">
-                        ${"ringing"===this._callState?n4`
+                        ${"ringing"!==this._callState||this._session||this._isConnecting?"":n4`
                                 <ha-button @click="${this._handleAnswer}" class="answer">
                                     <ha-icon icon="mdi:phone"></ha-icon> Answer
                                 </ha-button>
+                            `}
+                        
+                        ${this._isConnecting?n4`
+                                <div class="connecting-message">
+                                    <ha-circular-progress indeterminate></ha-circular-progress>
+                                    <p>Connecting to call...</p>
+                                </div>
                             `:""}
                         
-                        ${"active"===this._callState?n4`
+                        ${this._session&&"active"===this._callState?n4`
                                 <ha-button @click="${this._handleMute}" class="${this._isMuted?"muted":"unmuted"}">
                                     <ha-icon icon="${this._isMuted?"mdi:microphone-off":"mdi:microphone"}"></ha-icon>
                                     ${this._isMuted?"Unmute":"Mute"}
                                 </ha-button>
                             `:""}
                         
-                        ${"inactive"!==this._callState?n4`
+                        ${this._session&&"inactive"!==this._callState?n4`
                                 <ha-button @click="${this._handleHangup}" class="hangup">
                                     <ha-icon icon="mdi:phone-hangup"></ha-icon> Hang Up
                                 </ha-button>
