@@ -1,4 +1,5 @@
 DOMAIN = "asterisk_doorbell"
+VERSION = "1.0.0"
 
 COMPONENT_NAME = "Asterisk Doorbell"
 COMPONENT_PATH = "custom_components/%s" % DOMAIN

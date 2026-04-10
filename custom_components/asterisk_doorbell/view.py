@@ -8,7 +8,8 @@ from .const import (
     COMPONENT_PATH,
     FRONTEND_SCRIPT_URL,
     SETTINGS_PANEL_URL,
-    SETTINGS_SCRIPT_URL
+    SETTINGS_SCRIPT_URL,
+    VERSION,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -32,7 +33,7 @@ async def async_setup_view(hass):
         ]
     )
 
-    add_extra_js_url(hass, f"/{FRONTEND_SCRIPT_URL}")
+    add_extra_js_url(hass, f"/{FRONTEND_SCRIPT_URL}?v={VERSION}")
 
     # Check if panel is already registered to prevent "Overwriting panel" error
     if SETTINGS_PANEL_URL not in hass.data.get("frontend_panels", {}):
@@ -47,7 +48,7 @@ async def async_setup_view(hass):
                 config={
                     "_panel_custom": {
                         "name": "asterisk-doorbell-panel",
-                        "js_url": f"/{SETTINGS_SCRIPT_URL}"
+                        "js_url": f"/{SETTINGS_SCRIPT_URL}?v={VERSION}"
                     }
                 }
             )
