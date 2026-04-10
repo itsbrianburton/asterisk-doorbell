@@ -109,6 +109,14 @@ export class AsteriskDoorbellEditor extends LitElement {
                         @input=${this._valueChanged}
                     ></ha-textfield>
                     
+                    <ha-formfield label="Enable Debug">
+                        <ha-switch
+                            .checked=${this._config.debug || false}
+                            .configValue=${'debug'}
+                            @change=${this._valueChanged}
+                        ></ha-switch>
+                    </ha-formfield>
+                    
                     <div class="auto-fill-section">
                         <ha-button @click="${this._autoFillSensors}" class="auto-fill">
                             Auto-Fill Sensors

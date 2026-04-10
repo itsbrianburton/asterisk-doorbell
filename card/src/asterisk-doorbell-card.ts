@@ -14,21 +14,72 @@ interface Config extends LovelaceCardConfig {
     call_status_entity?: string;
     confbridge_id_entity?: string;
     extension_entity?: string;
+    debug?: boolean;
 }
+
+// Global registry to track which card is handling a call
+const globalCallRegistry = {
+    activeCardId: null as string | null,
+    pendingSessions: new Map<string, RTCSession>(),
+
+    registerActiveCard(cardId: string): boolean {
+        if (this.activeCardId && this.activeCardId !== cardId) {
+            return false; // Another card is already handling the call
+        }
+        this.activeCardId = cardId;
+        return true;
+    },
+
+    releaseActiveCard(cardId: string): void {
+        if (this.activeCardId === cardId) {
+            this.activeCardId = null;
+        }
+    },
+
+    isActiveCard(cardId: string): boolean {
+        return this.activeCardId === cardId;
+    },
+
+    hasActiveCard(): boolean {
+        return this.activeCardId !== null;
+    },
+
+    storePendingSession(cardId: string, session: RTCSession): void {
+        this.pendingSessions.set(cardId, session);
+    },
+
+    removePendingSession(cardId: string): void {
+        this.pendingSessions.delete(cardId);
+    },
+
+    terminateOtherPendingSessions(cardId: string): void {
+        this.pendingSessions.forEach((session, id) => {
+            if (id !== cardId) {
+                try {
+                    session.terminate();
+                } catch (e) {
+                    console.warn('Failed to terminate pending session:', e);
+                }
+            }
+        });
+        this.pendingSessions.clear();
+    }
+};
 
 export class AsteriskDoorbellCard extends LitElement {
     @property({ attribute: false }) public hass!: HomeAssistant;
     @state() private _config: Config = {} as Config;
     @state() private _header: string | typeof nothing | undefined;
     @state() private _callState: string = 'inactive';
-    @state() private _callStatusEntity: HassEntity | null = null;
-    @state() private _confbridgeIdEntity: HassEntity | null = null;
-    @state() private _extensionEntity: HassEntity | null = null;
+    private _callStatusEntity: HassEntity | null = null;
+    private _confbridgeIdEntity: HassEntity | null = null;
+    private _extensionEntity: HassEntity | null = null;
     @state() private _confbridgeId: string = '';
     @state() private _extension: string = '';
     @state() private _isMuted: boolean = false;
     @state() private _videoVisible: boolean = false;
     @state() private _isConnecting: boolean = false;
+    @state() private _hasPendingIncomingCall: boolean = false;
 
     // SIP/WebRTC properties
     private _socket: UA | null = null;
@@ -38,24 +89,25 @@ export class AsteriskDoorbellCard extends LitElement {
     private _remoteAudioElement: HTMLAudioElement | null = null;
     private _remoteVideoElement: HTMLVideoElement | null = null;
     private _initializationAttempted: boolean = false;
+    private _cardId: string;
     private _callConfig: any = {
         mediaConstraints: {
             audio: true,
-            video: true
+            video: false
         },
         rtcOfferConstraints: {
             offerToReceiveAudio: true,
-            offerToReceiveVideo: true
+            offerToReceiveVideo: false
         }
     };
 
     constructor() {
         super();
+        this._cardId = `card_${Math.random().toString(36).substr(2, 9)}`;
         this._initializeSIPWhenReady();
     }
 
     private async _initializeSIPWhenReady() {
-        // Wait for the card to be ready and hass to be available
         await this.updateComplete;
         await new Promise(resolve => setTimeout(resolve, 2000));
 
@@ -101,12 +153,17 @@ export class AsteriskDoorbellCard extends LitElement {
     }
 
     private _initializeMediaElements() {
-        // Create audio element for remote audio
+        if (this._remoteAudioElement) {
+            this._remoteAudioElement.remove();
+        }
+        if (this._remoteVideoElement) {
+            this._remoteVideoElement.remove();
+        }
+
         this._remoteAudioElement = document.createElement('audio');
         this._remoteAudioElement.autoplay = true;
         document.body.appendChild(this._remoteAudioElement);
 
-        // Create video element for remote video (doorbell camera)
         this._remoteVideoElement = document.createElement('video');
         this._remoteVideoElement.autoplay = true;
         this._remoteVideoElement.style.display = 'none';
@@ -161,7 +218,7 @@ export class AsteriskDoorbellCard extends LitElement {
                 register: true,
                 register_expires: 300,
                 session_timers: false,
-                user_agent: 'Asterisk Doorbell HA'
+                user_agent: `Asterisk Doorbell HA - ${this._cardId}`
             });
 
             this._socket
@@ -189,17 +246,50 @@ export class AsteriskDoorbellCard extends LitElement {
     }
 
     private _handleNewRTCSession(event: RTCSessionEvent) {
-        if (this._session) {
-            this._log("Already have active session, rejecting new one");
-            event.session.terminate();
-            return;
+        const session = event.session;
+
+        // If this is an incoming call
+        if (session.direction === 'incoming') {
+            this._log("Incoming call received");
+
+            // Check if another card is already handling a call
+            if (globalCallRegistry.hasActiveCard() && !globalCallRegistry.isActiveCard(this._cardId)) {
+                this._log("Another card is already handling a call, rejecting this one");
+                session.terminate();
+                return;
+            }
+
+            // If this card already has an active session, reject the new one
+            if (this._session) {
+                this._log("This card already has an active session, rejecting new one");
+                session.terminate();
+                return;
+            }
+
+            // Store as pending session - don't auto-answer
+            globalCallRegistry.storePendingSession(this._cardId, session);
+            this._hasPendingIncomingCall = true;
+            this._session = session;
+
+            // Set up event handlers but don't answer yet
+            this._setupSessionHandlers(session);
+
+            this._log("Incoming call pending - waiting for user to answer");
+            this.requestUpdate();
+
+        } else {
+            // Outgoing call
+            this._session = session;
+            this._setupSessionHandlers(session);
         }
+    }
 
-        this._session = event.session;
-
-        this._session
+    private _setupSessionHandlers(session: RTCSession) {
+        session
             .on('accepted', () => {
                 this._log("WebRTC session accepted - audio/video connected");
+                this._hasPendingIncomingCall = false;
+                this.requestUpdate();
             })
             .on('ended', () => {
                 this._log("WebRTC session ended");
@@ -227,6 +317,9 @@ export class AsteriskDoorbellCard extends LitElement {
 
                         if (audioTracks.length > 0 && this._remoteAudioElement) {
                             this._remoteAudioElement.srcObject = stream;
+                            this._remoteAudioElement.play().catch(e => {
+                                this._log("Audio autoplay blocked: " + e, "error");
+                            });
                             this._log("Audio stream connected");
                         }
                     }
@@ -255,14 +348,17 @@ export class AsteriskDoorbellCard extends LitElement {
             this._remoteVideoElement.style.display = 'none';
         }
 
+        globalCallRegistry.releaseActiveCard(this._cardId);
+        globalCallRegistry.removePendingSession(this._cardId);
+
         this._session = null;
         this._videoVisible = false;
         this._isMuted = false;
         this._isConnecting = false;
+        this._hasPendingIncomingCall = false;
         this.requestUpdate();
     }
 
-    // This is called when the configuration changes
     setConfig(config: Config) {
         this._config = { ...config };
         this._header = config.header === "" ? nothing : config.header;
@@ -291,8 +387,19 @@ export class AsteriskDoorbellCard extends LitElement {
     }
 
     updated(changedProps: any) {
+        const previousCallState = changedProps.get('_callState');
+
         if (changedProps.has('hass') && this._config) {
             this._updateState();
+        }
+
+        // If call state changed to inactive and we have an active session, terminate it
+        if (changedProps.has('_callState') &&
+            this._callState === 'inactive' &&
+            previousCallState !== 'inactive' &&
+            this._session) {
+            this._log("Call status changed to inactive, terminating session");
+            this._handleHangup();
         }
 
         if (this._videoVisible) {
@@ -321,26 +428,26 @@ export class AsteriskDoorbellCard extends LitElement {
         }
 
         if (this._config.call_status_entity) {
-            this._callStatusEntity = this.hass.states[this._config.call_status_entity];
-            if (this._callStatusEntity) {
-                this._callState = this._callStatusEntity.state;
-                console.log('Card: Call state updated to:', this._callState);
+            const entity = this.hass.states[this._config.call_status_entity];
+            if (entity && entity.state !== this._callState) {
+                this._callStatusEntity = entity;
+                this._callState = entity.state;
             }
         }
 
         if (this._config.confbridge_id_entity) {
-            this._confbridgeIdEntity = this.hass.states[this._config.confbridge_id_entity];
-            if (this._confbridgeIdEntity) {
-                this._confbridgeId = this._confbridgeIdEntity.state;
-                console.log('Card: Confbridge ID updated to:', this._confbridgeId);
+            const entity = this.hass.states[this._config.confbridge_id_entity];
+            if (entity && entity.state !== this._confbridgeId) {
+                this._confbridgeIdEntity = entity;
+                this._confbridgeId = entity.state;
             }
         }
 
         if (this._config.extension_entity) {
-            this._extensionEntity = this.hass.states[this._config.extension_entity];
-            if (this._extensionEntity) {
-                this._extension = this._extensionEntity.state;
-                console.log('Card: Extension updated to:', this._extension);
+            const entity = this.hass.states[this._config.extension_entity];
+            if (entity && entity.state !== this._extension) {
+                this._extensionEntity = entity;
+                this._extension = entity.state;
             }
         }
     }
@@ -356,10 +463,24 @@ export class AsteriskDoorbellCard extends LitElement {
             return;
         }
 
+        // Register this card as the active handler
+        if (!globalCallRegistry.registerActiveCard(this._cardId)) {
+            this._log("Another card is already handling the call", "error");
+            return;
+        }
+
+        // Terminate pending sessions on other cards
+        globalCallRegistry.terminateOtherPendingSessions(this._cardId);
+
         console.log('Card: Answering call for confbridge:', this._confbridgeId);
 
-        // Set loading state
+        // Prime audio element with user gesture so browser allows playback later
+        if (this._remoteAudioElement) {
+            this._remoteAudioElement.play().catch(() => {});
+        }
+
         this._isConnecting = true;
+        this._hasPendingIncomingCall = false;
         this.requestUpdate();
 
         try {
@@ -369,6 +490,7 @@ export class AsteriskDoorbellCard extends LitElement {
                 if (!this._socket) {
                     console.error('SIP initialization failed');
                     this._isConnecting = false;
+                    globalCallRegistry.releaseActiveCard(this._cardId);
                     this.requestUpdate();
                     return;
                 }
@@ -377,37 +499,24 @@ export class AsteriskDoorbellCard extends LitElement {
             if (!this._socket.isRegistered()) {
                 console.error('SIP client not registered');
                 this._isConnecting = false;
+                globalCallRegistry.releaseActiveCard(this._cardId);
                 this.requestUpdate();
                 return;
             }
 
-            const callTarget = `sip:${this._extension}@${this._settings.asterisk_host}`;
-            this._log(`Answering call by calling admin extension: ${callTarget}`);
+            // If we have a pending incoming call session, answer it
+            if (this._session && this._session.direction === 'incoming') {
+                this._log("Answering incoming call");
+                this._session.answer(this._callConfig);
+            } else {
+                // Make outgoing call to join conference
+                const callTarget = `sip:${this._extension}@${this._settings.asterisk_host}`;
+                this._log(`Making outgoing call to: ${callTarget}`);
 
-            this._session = this._socket.call(callTarget, this._callConfig);
+                this._session = this._socket.call(callTarget, this._callConfig);
+                this._setupSessionHandlers(this._session);
+            }
 
-            // Set up session event handlers for this specific session
-            this._session.on('connecting', () => {
-                this._log("Call connecting...");
-            });
-
-            this._session.on('progress', () => {
-                this._log("Call in progress...");
-            });
-
-            this._session.on('accepted', () => {
-                this._log("Call accepted");
-                this._isConnecting = false;
-                this.requestUpdate();
-            });
-
-            this._session.on('failed', () => {
-                this._log("Call failed", "error");
-                this._isConnecting = false;
-                this.requestUpdate();
-            });
-
-            // Stop loading after a few seconds regardless (fallback)
             setTimeout(() => {
                 if (this._isConnecting) {
                     this._isConnecting = false;
@@ -418,6 +527,7 @@ export class AsteriskDoorbellCard extends LitElement {
         } catch (error) {
             console.error('Failed to answer call:', error);
             this._isConnecting = false;
+            globalCallRegistry.releaseActiveCard(this._cardId);
             this.requestUpdate();
         }
     }
@@ -465,6 +575,15 @@ export class AsteriskDoorbellCard extends LitElement {
             .join(' ');
     }
 
+    private _getStatusIcon(): string {
+        if (this._callState === 'ringing' || this._hasPendingIncomingCall) {
+            return 'mdi:bell-ring';
+        } else if (this._callState === 'active' && this._session) {
+            return 'mdi:phone-in-talk';
+        }
+        return 'mdi:doorbell-video';
+    }
+
     private _getSIPStatus(): string {
         if (!this._socket) return 'not_initialized';
         if (!this._socket.isRegistered()) return 'not_registered';
@@ -472,7 +591,8 @@ export class AsteriskDoorbellCard extends LitElement {
     }
 
     private _log(msg: any, type: string = "debug") {
-        const prefix = "[ASTERISK_DOORBELL_CARD]";
+        if (!this._config.debug && type === "debug") return;
+        const prefix = `[ASTERISK_DOORBELL_CARD][${this._cardId}]`;
         if (type === "debug") {
             console.debug(prefix, msg);
         } else if (type === "error") {
@@ -482,16 +602,17 @@ export class AsteriskDoorbellCard extends LitElement {
         }
     }
 
-    // Public debug methods for external access
     public getSIPStatus(): string {
         return this._getSIPStatus();
     }
 
     public getDiagnosticInfo() {
         return {
+            cardId: this._cardId,
             socketExists: !!this._socket,
             socketStatus: this._socket ? (this._socket.isRegistered() ? 'registered' : 'not registered') : 'null',
             sessionExists: !!this._session,
+            sessionDirection: this._session?.direction || 'none',
             settings: this._settings,
             hassConnected: !!this.hass,
             initializationAttempted: this._initializationAttempted,
@@ -500,7 +621,10 @@ export class AsteriskDoorbellCard extends LitElement {
             extension: this._extension,
             videoVisible: this._videoVisible,
             isMuted: this._isMuted,
-            isConnecting: this._isConnecting
+            isConnecting: this._isConnecting,
+            hasPendingIncomingCall: this._hasPendingIncomingCall,
+            isActiveCard: globalCallRegistry.isActiveCard(this._cardId),
+            globalActiveCardId: globalCallRegistry.activeCardId
         };
     }
 
@@ -524,22 +648,38 @@ export class AsteriskDoorbellCard extends LitElement {
         }
 
         let statusClass = 'status-inactive';
-        if (this._callState === 'active') {
+        const shouldShowRinging = this._callState === 'ringing' || this._hasPendingIncomingCall;
+        const isThisCardActive = globalCallRegistry.isActiveCard(this._cardId);
+
+        if (this._callState === 'active' && isThisCardActive && this._session) {
             statusClass = 'status-active';
-        } else if (this._callState === 'ringing') {
+        } else if (shouldShowRinging && !globalCallRegistry.hasActiveCard()) {
             statusClass = 'status-ringing';
         }
 
         const displayName = this._getDisplayName();
         const sipStatus = this._getSIPStatus();
+        const statusIcon = this._getStatusIcon();
 
         return html`
             <ha-card header="${this._header || 'Doorbell'}">
                 <div class="card-content ${statusClass}">
-                    ${this._callState !== 'inactive' ? 
+                    <div class="status-icon-container">
+                        <ha-icon class="status-icon ${statusClass}" icon="${statusIcon}"></ha-icon>
+                    </div>
+                    
+                    ${shouldShowRinging && !globalCallRegistry.hasActiveCard() ? 
                         html`
                             <div class="caller-info">
-                                <h2>${displayName} ${this._callState === 'ringing' ? ' is calling...' : ' - Connected'}</h2>
+                                <h2>${displayName} is calling...</h2>
+                                ${this._extension ? html`<p>Extension: ${this._extension}</p>` : ''}
+                                ${this._confbridgeId ? html`<p>Confbridge: ${this._confbridgeId}</p>` : ''}
+                            </div>
+                        ` : 
+                        this._callState === 'active' && isThisCardActive && this._session ?
+                        html`
+                            <div class="caller-info">
+                                <h2>${displayName} - Connected</h2>
                                 ${this._extension ? html`<p>Extension: ${this._extension}</p>` : ''}
                                 ${this._confbridgeId ? html`<p>Confbridge: ${this._confbridgeId}</p>` : ''}
                             </div>
@@ -551,7 +691,7 @@ export class AsteriskDoorbellCard extends LitElement {
                                     </div>
                                 ` : ''
                             }
-                        ` : 
+                        ` :
                         html`
                             <div class="caller-info">
                                 <h2>${displayName}</h2>
@@ -561,7 +701,7 @@ export class AsteriskDoorbellCard extends LitElement {
                     }
                     
                     <div class="button-container">
-                        ${this._callState === 'ringing' && !this._session && !this._isConnecting ? 
+                        ${shouldShowRinging && !this._session && !this._isConnecting && !globalCallRegistry.hasActiveCard() ? 
                             html`
                                 <ha-button @click="${this._handleAnswer}" class="answer">
                                     <ha-icon icon="mdi:phone"></ha-icon> Answer
@@ -578,7 +718,7 @@ export class AsteriskDoorbellCard extends LitElement {
                             ` : ''
                         }
                         
-                        ${this._session && this._callState === 'active' ? 
+                        ${this._session && this._callState === 'active' && isThisCardActive ? 
                             html`
                                 <ha-button @click="${this._handleMute}" class="${this._isMuted ? 'muted' : 'unmuted'}">
                                     <ha-icon icon="${this._isMuted ? 'mdi:microphone-off' : 'mdi:microphone'}"></ha-icon>
@@ -587,7 +727,7 @@ export class AsteriskDoorbellCard extends LitElement {
                             ` : ''
                         }
                         
-                        ${this._session && this._callState !== 'inactive' ? 
+                        ${this._session && isThisCardActive ? 
                             html`
                                 <ha-button @click="${this._handleHangup}" class="hangup">
                                     <ha-icon icon="mdi:phone-hangup"></ha-icon> Hang Up
@@ -596,17 +736,21 @@ export class AsteriskDoorbellCard extends LitElement {
                         }
                     </div>
                     
-                    <!-- Debug info (remove in production) -->
+                    <!-- Debug info -->
+                    ${this._config.debug ? html`
                     <div style="margin-top: 16px; padding: 8px; background: var(--card-background-color); border-radius: 4px; font-size: 0.8rem; color: var(--secondary-text-color);">
                         <strong>Debug:</strong><br>
+                        Card ID: ${this._cardId}<br>
                         Call Status: ${this._callState}<br>
                         Confbridge: ${this._confbridgeId}<br>
                         Extension: ${this._extension}<br>
-                        Entities: ${this._config.call_status_entity ? '✓' : '✗'} ${this._config.confbridge_id_entity ? '✓' : '✗'} ${this._config.extension_entity ? '✓' : '✗'}<br>
                         SIP Status: ${sipStatus}<br>
                         Has Session: ${!!this._session ? '✓' : '✗'}<br>
+                        Is Active Card: ${isThisCardActive ? '✓' : '✗'}<br>
+                        Pending Incoming: ${this._hasPendingIncomingCall ? '✓' : '✗'}<br>
                         Connecting: ${this._isConnecting ? '✓' : '✗'}
                     </div>
+                    ` : ''}
                 </div>
             </ha-card>
         `;
@@ -621,7 +765,8 @@ export class AsteriskDoorbellCard extends LitElement {
             call_status_entity: "",
             confbridge_id_entity: "",
             extension_entity: "",
-            header: "Doorbell"
+            header: "Doorbell",
+            debug: false
         };
     }
 
@@ -643,6 +788,28 @@ export class AsteriskDoorbellCard extends LitElement {
                     display: flex;
                     flex-direction: column;
                     align-items: center;
+                }
+                
+                .status-icon-container {
+                    width: 100%;
+                    display: flex;
+                    justify-content: center;
+                    margin-bottom: 16px;
+                }
+                
+                .status-icon {
+                    width: 64px;
+                    height: 64px;
+                    color: var(--secondary-text-color);
+                }
+                
+                .status-icon.status-ringing {
+                    color: var(--warning-color, #FF9800);
+                    animation: ring-pulse 1.5s infinite;
+                }
+                
+                .status-icon.status-active {
+                    color: var(--success-color, #4CAF50);
                 }
                 
                 .caller-info {
@@ -734,6 +901,17 @@ export class AsteriskDoorbellCard extends LitElement {
                     }
                     100% {
                         border-left: 4px solid transparent;
+                    }
+                }
+                
+                @keyframes ring-pulse {
+                    0%, 100% {
+                        transform: scale(1);
+                        opacity: 1;
+                    }
+                    50% {
+                        transform: scale(1.1);
+                        opacity: 0.8;
                     }
                 }
                 

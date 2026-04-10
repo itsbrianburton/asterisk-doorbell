@@ -151,7 +151,7 @@ async def async_setup_services(hass: HomeAssistant) -> None:
 
             # Update all coordinators in the correct order
             for entry_id, coordinator in hass.data[DOMAIN].items():
-                coordinator.confbridge_id = confbridge_id
+                coordinator.confbridge_id = ""
                 coordinator.async_update_listeners()  # Update confbridge_id sensor
 
                 coordinator.extension = ""
