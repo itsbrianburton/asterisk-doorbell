@@ -278,9 +278,41 @@ export class AsteriskDoorbellCard extends LitElement {
             this.requestUpdate();
 
         } else {
-            // Outgoing call
+            // Outgoing call - handled by _handleAnswer, just store the reference.
+            // Do NOT call _setupSessionHandlers here; _handleAnswer already does it
+            // after ua.call() returns, avoiding duplicate event listeners.
             this._session = session;
-            this._setupSessionHandlers(session);
+        }
+    }
+
+    private _attachTrackHandler(peerconnection: RTCPeerConnection) {
+        peerconnection.ontrack = (event) => {
+            // On Android WebView, event.streams may be empty even when
+            // event.track is valid. Fall back to creating a stream from the track.
+            const stream = event.streams?.[0] || new MediaStream([event.track]);
+            const videoTracks = stream.getVideoTracks();
+            const audioTracks = stream.getAudioTracks();
+
+            if (videoTracks.length > 0 && this._remoteVideoElement) {
+                this._remoteVideoElement.srcObject = stream;
+                this._log("Video stream connected");
+                this._videoVisible = true;
+                this.requestUpdate();
+            }
+
+            if (audioTracks.length > 0 && this._remoteAudioElement) {
+                this._remoteAudioElement.srcObject = stream;
+                this._remoteAudioElement.play().catch(e => {
+                    this._log("Audio autoplay blocked: " + e, "error");
+                });
+                this._log("Audio stream connected");
+            }
+        };
+
+        const senders = peerconnection.getSenders();
+        const audioSender = senders.find(s => s.track && s.track.kind === 'audio');
+        if (audioSender && audioSender.track) {
+            this._localStream = new MediaStream([audioSender.track]);
         }
     }
 
@@ -300,36 +332,7 @@ export class AsteriskDoorbellCard extends LitElement {
                 this._cleanupSession();
             })
             .on('peerconnection', (e) => {
-                const peerconnection = e.peerconnection;
-
-                peerconnection.ontrack = (event) => {
-                    if (event.streams && event.streams[0]) {
-                        const stream = event.streams[0];
-                        const videoTracks = stream.getVideoTracks();
-                        const audioTracks = stream.getAudioTracks();
-
-                        if (videoTracks.length > 0 && this._remoteVideoElement) {
-                            this._remoteVideoElement.srcObject = stream;
-                            this._log("Video stream connected");
-                            this._videoVisible = true;
-                            this.requestUpdate();
-                        }
-
-                        if (audioTracks.length > 0 && this._remoteAudioElement) {
-                            this._remoteAudioElement.srcObject = stream;
-                            this._remoteAudioElement.play().catch(e => {
-                                this._log("Audio autoplay blocked: " + e, "error");
-                            });
-                            this._log("Audio stream connected");
-                        }
-                    }
-                };
-
-                const senders = peerconnection.getSenders();
-                const audioSender = senders.find(s => s.track && s.track.kind === 'audio');
-                if (audioSender && audioSender.track) {
-                    this._localStream = new MediaStream([audioSender.track]);
-                }
+                this._attachTrackHandler(e.peerconnection);
             });
     }
 
@@ -515,6 +518,15 @@ export class AsteriskDoorbellCard extends LitElement {
 
                 this._session = this._socket.call(callTarget, this._callConfig);
                 this._setupSessionHandlers(this._session);
+
+                // Defensively attach ontrack on the already-created peer connection.
+                // The peerconnection event in _setupSessionHandlers also does this,
+                // but setting ontrack again is idempotent and guards against any
+                // timing edge cases across JsSIP versions.
+                const pc = this._session.connection;
+                if (pc) {
+                    this._attachTrackHandler(pc);
+                }
             }
 
             setTimeout(() => {
