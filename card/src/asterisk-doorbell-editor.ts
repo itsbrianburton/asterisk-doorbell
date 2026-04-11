@@ -1,7 +1,6 @@
 import { LitElement, html, TemplateResult, css } from 'lit';
-import { customElement, property, state } from 'lit/decorators';
+import { property, state } from 'lit/decorators';
 
-@customElement('asterisk-doorbell-editor')
 export class AsteriskDoorbellEditor extends LitElement {
     @property({ attribute: false }) public hass;
     @property() public lovelace;
