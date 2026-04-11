@@ -170,8 +170,12 @@ console.info(
 );
 
 // Register the custom card
-if (!customElements.get("asterisk-doorbell-card")) {
-    customElements.define("asterisk-doorbell-card", AsteriskDoorbellCard);
+try {
+    if (!customElements.get("asterisk-doorbell-card")) {
+        customElements.define("asterisk-doorbell-card", AsteriskDoorbellCard);
+    }
+} catch (e) {
+    console.error("[ASTERISK_DOORBELL] Failed to register custom element:", e);
 }
 
 // Register the editor
