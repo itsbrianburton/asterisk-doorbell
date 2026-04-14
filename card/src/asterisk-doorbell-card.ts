@@ -15,6 +15,12 @@ interface Config extends LovelaceCardConfig {
     confbridge_id_entity?: string;
     extension_entity?: string;
     debug?: boolean;
+    theme?: 'large' | 'small';
+    labels?: {
+        ringing?: string;
+        hangup?: string;
+        inactive?: string;
+    };
 }
 
 // Global registry to track which card is handling a call
@@ -77,6 +83,7 @@ export class AsteriskDoorbellCard extends LitElement {
     @state() private _confbridgeId: string = '';
     @state() private _extension: string = '';
     @state() private _isMuted: boolean = false;
+    @state() private _isVolumeMuted: boolean = false;
     @state() private _videoVisible: boolean = false;
     @state() private _isConnecting: boolean = false;
     @state() private _hasPendingIncomingCall: boolean = false;
@@ -357,6 +364,7 @@ export class AsteriskDoorbellCard extends LitElement {
         this._session = null;
         this._videoVisible = false;
         this._isMuted = false;
+        this._isVolumeMuted = false;
         this._isConnecting = false;
         this._hasPendingIncomingCall = false;
         this.requestUpdate();
@@ -565,6 +573,14 @@ export class AsteriskDoorbellCard extends LitElement {
         }
     }
 
+    private _handleVolumeMute() {
+        if (!this._remoteAudioElement) return;
+
+        this._isVolumeMuted = !this._isVolumeMuted;
+        this._remoteAudioElement.muted = this._isVolumeMuted;
+        this.requestUpdate();
+    }
+
     private async _handleHangup() {
         console.log('Card: Hanging up call');
 
@@ -575,25 +591,6 @@ export class AsteriskDoorbellCard extends LitElement {
                 console.error('Failed to hang up call:', error);
             }
         }
-    }
-
-    private _getDisplayName(): string {
-        if (!this._confbridgeId) return 'Doorbell';
-
-        return this._confbridgeId
-            .replace('doorbell_', '')
-            .split('_')
-            .map(word => word.charAt(0).toUpperCase() + word.slice(1))
-            .join(' ');
-    }
-
-    private _getStatusIcon(): string {
-        if (this._callState === 'ringing' || this._hasPendingIncomingCall) {
-            return 'mdi:bell-ring';
-        } else if (this._callState === 'active' && this._session) {
-            return 'mdi:phone-in-talk';
-        }
-        return 'mdi:doorbell-video';
     }
 
     private _getSIPStatus(): string {
@@ -633,6 +630,7 @@ export class AsteriskDoorbellCard extends LitElement {
             extension: this._extension,
             videoVisible: this._videoVisible,
             isMuted: this._isMuted,
+            isVolumeMuted: this._isVolumeMuted,
             isConnecting: this._isConnecting,
             hasPendingIncomingCall: this._hasPendingIncomingCall,
             isActiveCard: globalCallRegistry.isActiveCard(this._cardId),
@@ -654,113 +652,119 @@ export class AsteriskDoorbellCard extends LitElement {
         }
     }
 
+    private _getLabel(state: 'ringing' | 'hangup' | 'inactive'): string {
+        const defaults = { ringing: 'Answer', hangup: 'End Live', inactive: 'Idle' };
+        return this._config.labels?.[state] || defaults[state];
+    }
+
     render() {
         if (!this.hass || !this._config) {
             return html``;
         }
 
-        let statusClass = 'status-inactive';
-        const shouldShowRinging = this._callState === 'ringing' || this._hasPendingIncomingCall;
         const isThisCardActive = globalCallRegistry.isActiveCard(this._cardId);
+        const shouldShowRinging = this._callState === 'ringing' || this._hasPendingIncomingCall;
+        const isInCall = this._callState === 'active' && isThisCardActive && this._session;
+        const isLarge = this._config.theme !== 'small';
+        const sipStatus = this._getSIPStatus();
 
-        if (this._callState === 'active' && isThisCardActive && this._session) {
-            statusClass = 'status-active';
+        // Determine call button state
+        let callBtnIcon = 'mdi:phone-off';
+        let callBtnLabel = this._getLabel('inactive');
+        let callBtnClass = 'call-btn inactive';
+        let callBtnDisabled = true;
+        let callBtnHandler = () => {};
+
+        if (this._isConnecting) {
+            callBtnIcon = 'mdi:phone-clock';
+            callBtnLabel = isLarge ? 'Connecting...' : '';
+            callBtnClass = 'call-btn connecting';
+            callBtnDisabled = true;
         } else if (shouldShowRinging && !globalCallRegistry.hasActiveCard()) {
-            statusClass = 'status-ringing';
+            callBtnIcon = 'mdi:phone-ring';
+            callBtnLabel = this._getLabel('ringing');
+            callBtnClass = 'call-btn ringing';
+            callBtnDisabled = false;
+            callBtnHandler = () => this._handleAnswer();
+        } else if (isInCall) {
+            callBtnIcon = 'mdi:phone-hangup';
+            callBtnLabel = this._getLabel('hangup');
+            callBtnClass = 'call-btn active';
+            callBtnDisabled = false;
+            callBtnHandler = () => this._handleHangup();
         }
 
-        const displayName = this._getDisplayName();
-        const sipStatus = this._getSIPStatus();
-        const statusIcon = this._getStatusIcon();
-
         return html`
-            <ha-card header="${this._header || 'Doorbell'}">
-                <div class="card-content ${statusClass}">
-                    <div class="status-icon-container">
-                        <ha-icon class="status-icon ${statusClass}" icon="${statusIcon}"></ha-icon>
-                    </div>
-                    
-                    ${shouldShowRinging && !globalCallRegistry.hasActiveCard() ? 
-                        html`
-                            <div class="caller-info">
-                                <h2>${displayName} is calling...</h2>
-                                ${this._extension ? html`<p>Extension: ${this._extension}</p>` : ''}
-                                ${this._confbridgeId ? html`<p>Confbridge: ${this._confbridgeId}</p>` : ''}
-                            </div>
-                        ` : 
-                        this._callState === 'active' && isThisCardActive && this._session ?
-                        html`
-                            <div class="caller-info">
-                                <h2>${displayName} - Connected</h2>
-                                ${this._extension ? html`<p>Extension: ${this._extension}</p>` : ''}
-                                ${this._confbridgeId ? html`<p>Confbridge: ${this._confbridgeId}</p>` : ''}
-                            </div>
-                            
-                            ${this._videoVisible ? 
-                                html`
-                                    <div class="video-container">
-                                        <div id="doorbell-video"></div>
-                                    </div>
-                                ` : ''
-                            }
-                        ` :
-                        html`
-                            <div class="caller-info">
-                                <h2>${displayName}</h2>
-                                <p>No active calls</p>
-                            </div>
-                        `
-                    }
-                    
-                    <div class="button-container">
-                        ${shouldShowRinging && !this._session && !this._isConnecting && !globalCallRegistry.hasActiveCard() ? 
-                            html`
-                                <ha-button @click="${this._handleAnswer}" class="answer">
-                                    <ha-icon icon="mdi:phone"></ha-icon> Answer
-                                </ha-button>
-                            ` : ''
-                        }
-                        
-                        ${this._isConnecting ? 
-                            html`
-                                <div class="connecting-message">
-                                    <ha-circular-progress indeterminate></ha-circular-progress>
-                                    <p>Connecting to call...</p>
-                                </div>
-                            ` : ''
-                        }
-                        
-                        ${this._session && this._callState === 'active' && isThisCardActive ? 
-                            html`
-                                <ha-button @click="${this._handleMute}" class="${this._isMuted ? 'muted' : 'unmuted'}">
-                                    <ha-icon icon="${this._isMuted ? 'mdi:microphone-off' : 'mdi:microphone'}"></ha-icon>
-                                    ${this._isMuted ? 'Unmute' : 'Mute'}
-                                </ha-button>
-                            ` : ''
-                        }
-                        
-                        ${this._session && isThisCardActive ? 
-                            html`
-                                <ha-button @click="${this._handleHangup}" class="hangup">
-                                    <ha-icon icon="mdi:phone-hangup"></ha-icon> Hang Up
-                                </ha-button>
-                            ` : ''
-                        }
-                    </div>
-                    
-                    <!-- Debug info -->
+            <ha-card>
+                <div class="card-content">
+                    ${isLarge ? html`
+                        <!-- Large theme: rectangular call button on top -->
+                        <button
+                            class="${callBtnClass} pill"
+                            ?disabled=${callBtnDisabled}
+                            @click=${callBtnHandler}
+                        >
+                            <ha-icon icon="${callBtnIcon}"></ha-icon>
+                            <span>${callBtnLabel}</span>
+                        </button>
+
+                        <div class="circle-row">
+                            <button
+                                class="circle-btn ${this._isMuted ? 'toggled' : ''}"
+                                ?disabled=${!isInCall}
+                                @click=${() => this._handleMute()}
+                            >
+                                <ha-icon icon="${this._isMuted ? 'mdi:microphone-off' : 'mdi:microphone'}"></ha-icon>
+                            </button>
+
+                            <button
+                                class="circle-btn ${this._isVolumeMuted ? 'toggled' : ''}"
+                                ?disabled=${!isInCall}
+                                @click=${() => this._handleVolumeMute()}
+                            >
+                                <ha-icon icon="${this._isVolumeMuted ? 'mdi:volume-off' : 'mdi:volume-high'}"></ha-icon>
+                            </button>
+                        </div>
+                    ` : html`
+                        <!-- Small theme: all circular buttons in a row -->
+                        <div class="circle-row">
+                            <button
+                                class="${callBtnClass} circle-btn"
+                                ?disabled=${callBtnDisabled}
+                                @click=${callBtnHandler}
+                            >
+                                <ha-icon icon="${callBtnIcon}"></ha-icon>
+                            </button>
+
+                            <button
+                                class="circle-btn ${this._isMuted ? 'toggled' : ''}"
+                                ?disabled=${!isInCall}
+                                @click=${() => this._handleMute()}
+                            >
+                                <ha-icon icon="${this._isMuted ? 'mdi:microphone-off' : 'mdi:microphone'}"></ha-icon>
+                            </button>
+
+                            <button
+                                class="circle-btn ${this._isVolumeMuted ? 'toggled' : ''}"
+                                ?disabled=${!isInCall}
+                                @click=${() => this._handleVolumeMute()}
+                            >
+                                <ha-icon icon="${this._isVolumeMuted ? 'mdi:volume-off' : 'mdi:volume-high'}"></ha-icon>
+                            </button>
+                        </div>
+                    `}
+
                     ${this._config.debug ? html`
-                    <div style="margin-top: 16px; padding: 8px; background: var(--card-background-color); border-radius: 4px; font-size: 0.8rem; color: var(--secondary-text-color);">
-                        <strong>Debug:</strong><br>
-                        Card ID: ${this._cardId}<br>
-                        Call Status: ${this._callState}<br>
-                        Confbridge: ${this._confbridgeId}<br>
-                        Extension: ${this._extension}<br>
-                        SIP Status: ${sipStatus}<br>
-                        Has Session: ${!!this._session ? '✓' : '✗'}<br>
-                        Is Active Card: ${isThisCardActive ? '✓' : '✗'}<br>
-                        Pending Incoming: ${this._hasPendingIncomingCall ? '✓' : '✗'}<br>
-                        Connecting: ${this._isConnecting ? '✓' : '✗'}
+                    <div class="debug-panel">
+                        Card ID: ${this._cardId} |
+                        Call: ${this._callState} |
+                        Confbridge: ${this._confbridgeId} |
+                        Ext: ${this._extension} |
+                        SIP: ${sipStatus} |
+                        Session: ${!!this._session ? 'Y' : 'N'} |
+                        Active: ${isThisCardActive ? 'Y' : 'N'} |
+                        Pending: ${this._hasPendingIncomingCall ? 'Y' : 'N'} |
+                        Connecting: ${this._isConnecting ? 'Y' : 'N'}
                     </div>
                     ` : ''}
                 </div>
@@ -777,8 +781,14 @@ export class AsteriskDoorbellCard extends LitElement {
             call_status_entity: "",
             confbridge_id_entity: "",
             extension_entity: "",
-            header: "Doorbell",
-            debug: false
+            header: "",
+            debug: false,
+            theme: "large",
+            labels: {
+                ringing: "Answer",
+                hangup: "End Live",
+                inactive: "Idle"
+            }
         };
     }
 
@@ -788,154 +798,127 @@ export class AsteriskDoorbellCard extends LitElement {
                 :host {
                     display: block;
                 }
-                
+
                 ha-card {
-                    padding-bottom: 16px;
-                    position: relative;
-                    overflow: hidden;
+                    background: transparent;
+                    border: none;
+                    box-shadow: none;
+                    padding: 0;
                 }
-                
+
                 .card-content {
-                    padding: 16px;
                     display: flex;
                     flex-direction: column;
                     align-items: center;
+                    padding: 1rem 0;
+                    gap: 1rem;
                 }
-                
-                .status-icon-container {
-                    width: 100%;
-                    display: flex;
-                    justify-content: center;
-                    margin-bottom: 16px;
-                }
-                
-                .status-icon {
-                    width: 64px;
-                    height: 64px;
-                    color: var(--secondary-text-color);
-                }
-                
-                .status-icon.status-ringing {
-                    color: var(--warning-color, #FF9800);
-                    animation: ring-pulse 1.5s infinite;
-                }
-                
-                .status-icon.status-active {
-                    color: var(--success-color, #4CAF50);
-                }
-                
-                .caller-info {
-                    width: 100%;
-                    text-align: center;
-                    margin-bottom: 24px;
-                }
-                
-                .caller-info h2 {
-                    margin: 0;
-                    font-size: 1.5rem;
-                    font-weight: 400;
-                }
-                
-                .caller-info p {
-                    margin: 8px 0 0 0;
-                    color: var(--secondary-text-color);
-                    font-size: 0.9rem;
-                }
-                
-                .button-container {
-                    display: flex;
-                    flex-wrap: wrap;
-                    justify-content: center;
-                    gap: 12px;
-                    width: 100%;
-                }
-                
-                .connecting-message {
-                    display: flex;
-                    flex-direction: column;
+
+                /* ── Shared button base ── */
+                button {
+                    cursor: pointer;
+                    border: none;
+                    outline: none;
+                    display: inline-flex;
                     align-items: center;
-                    gap: 8px;
-                    padding: 16px;
-                    color: var(--primary-color);
+                    justify-content: center;
+                    transition: background-color 0.2s, opacity 0.2s, box-shadow 0.2s;
+                    -webkit-tap-highlight-color: transparent;
+                    font-family: inherit;
+                    font-size: 0.875rem;
+                    font-weight: 500;
+                    color: var(--primary-text-color);
                 }
-                
-                .connecting-message p {
-                    margin: 0;
-                    font-size: 0.9rem;
+
+                button:disabled {
+                    opacity: 0.35;
+                    cursor: default;
+                    pointer-events: none;
+                }
+
+                /* ── Pill (large rectangular) button ── */
+                .pill {
+                    gap: 0.5rem;
+                    padding: 0.75rem 2rem;
+                    border-radius: 2rem;
+                    background: var(--card-background-color, rgba(255,255,255,0.08));
+                }
+
+                .pill ha-icon {
+                    --mdc-icon-size: 20px;
+                }
+
+                /* ── Circle button ── */
+                .circle-btn {
+                    width: 48px;
+                    height: 48px;
+                    border-radius: 50%;
+                    background: var(--card-background-color, rgba(255,255,255,0.08));
+                    padding: 0;
+                }
+
+                .circle-btn ha-icon {
+                    --mdc-icon-size: 22px;
+                }
+
+                .circle-row {
+                    display: flex;
+                    align-items: center;
+                    justify-content: center;
+                    gap: 1rem;
+                }
+
+                /* ── Call button states ── */
+                .call-btn.inactive {
                     color: var(--secondary-text-color);
                 }
-                
-                ha-button {
-                    min-width: 110px;
-                    --mdc-theme-primary: var(--primary-color);
+
+                .call-btn.ringing {
+                    background: var(--success-color, #4CAF50);
+                    color: #fff;
+                    animation: ring-pulse 1.5s ease-in-out infinite;
                 }
-                
-                ha-button.answer {
-                    --mdc-theme-primary: var(--success-color, #4CAF50);
+
+                .call-btn.active {
+                    background: var(--error-color, #F44336);
+                    color: #fff;
                 }
-                
-                ha-button.hangup {
-                    --mdc-theme-primary: var(--error-color, #F44336);
+
+                .call-btn.connecting {
+                    color: var(--secondary-text-color);
                 }
-                
-                ha-button.muted {
-                    --mdc-theme-primary: var(--warning-color, #FF9800);
+
+                /* ── Toggled state for mic/volume ── */
+                .circle-btn.toggled {
+                    background: var(--error-color, #F44336);
+                    color: #fff;
                 }
-                
-                .status-ringing {
-                    animation: pulse 1.5s infinite;
+
+                /* ── Hover/active feedback ── */
+                button:not(:disabled):hover {
+                    filter: brightness(1.15);
                 }
-                
-                .status-active {
-                    border-left: 4px solid var(--success-color, #4CAF50);
+
+                button:not(:disabled):active {
+                    filter: brightness(0.9);
                 }
-                
-                .video-container {
-                    width: 100%;
-                    margin: 16px 0;
-                    border-radius: 8px;
-                    overflow: hidden;
-                    background: #000;
-                }
-                
-                .video-container video {
-                    width: 100%;
-                    height: auto;
-                    display: block;
-                }
-                
-                @keyframes pulse {
-                    0% {
-                        border-left: 4px solid transparent;
-                    }
-                    50% {
-                        border-left: 4px solid var(--warning-color, #FF9800);
-                    }
-                    100% {
-                        border-left: 4px solid transparent;
-                    }
-                }
-                
+
+                /* ── Animations ── */
                 @keyframes ring-pulse {
-                    0%, 100% {
-                        transform: scale(1);
-                        opacity: 1;
-                    }
-                    50% {
-                        transform: scale(1.1);
-                        opacity: 0.8;
-                    }
+                    0%, 100% { box-shadow: 0 0 0 0 rgba(76, 175, 80, 0.4); }
+                    50% { box-shadow: 0 0 0 10px rgba(76, 175, 80, 0); }
                 }
-                
-                @media (max-width: 600px) {
-                    .button-container {
-                        flex-direction: column;
-                        align-items: stretch;
-                    }
-                    
-                    ha-button {
-                        width: 100%;
-                    }
+
+                /* ── Debug panel ── */
+                .debug-panel {
+                    margin-top: 0.5rem;
+                    padding: 0.5rem;
+                    background: var(--card-background-color, rgba(0,0,0,0.3));
+                    border-radius: 4px;
+                    font-size: 0.7rem;
+                    color: var(--secondary-text-color);
+                    text-align: center;
+                    word-break: break-all;
                 }
             `
         ];

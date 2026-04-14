@@ -71,6 +71,21 @@ export class AsteriskDoorbellEditor extends LitElement {
         this.dispatchEvent(new CustomEvent('config-changed', { detail: { config: this._config } }));
     }
 
+    // Handle label changes
+    private _labelChanged(field: string, value: string): void {
+        if (!this._config) return;
+
+        const labels = { ...(this._config.labels || {}) };
+        if (value === '') {
+            delete labels[field];
+        } else {
+            labels[field] = value;
+        }
+
+        this._config = { ...this._config, labels };
+        this.dispatchEvent(new CustomEvent('config-changed', { detail: { config: this._config } }));
+    }
+
     // Auto-fill the three sensors
     private _autoFillSensors() {
         if (!this.hass) return;
@@ -115,6 +130,35 @@ export class AsteriskDoorbellEditor extends LitElement {
                             @change=${this._valueChanged}
                         ></ha-switch>
                     </ha-formfield>
+                    
+                    <ha-select
+                        label="Theme"
+                        .value="${this._config.theme || 'large'}"
+                        .configValue=${'theme'}
+                        @selected=${this._valueChanged}
+                        @closed=${(ev) => ev.stopPropagation()}
+                    >
+                        <mwc-list-item value="large">Large</mwc-list-item>
+                        <mwc-list-item value="small">Small</mwc-list-item>
+                    </ha-select>
+                    
+                    <ha-textfield
+                        label="Ringing Label"
+                        .value="${this._config.labels?.ringing || 'Answer'}"
+                        @input=${(ev) => this._labelChanged('ringing', ev.target.value)}
+                    ></ha-textfield>
+                    
+                    <ha-textfield
+                        label="Hangup Label"
+                        .value="${this._config.labels?.hangup || 'End Live'}"
+                        @input=${(ev) => this._labelChanged('hangup', ev.target.value)}
+                    ></ha-textfield>
+                    
+                    <ha-textfield
+                        label="Inactive Label"
+                        .value="${this._config.labels?.inactive || 'Idle'}"
+                        @input=${(ev) => this._labelChanged('inactive', ev.target.value)}
+                    ></ha-textfield>
                     
                     <div class="auto-fill-section">
                         <ha-button @click="${this._autoFillSensors}" class="auto-fill">
