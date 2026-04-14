@@ -811,7 +811,7 @@ export class AsteriskDoorbellCard extends LitElement {
                     flex-direction: column;
                     align-items: center;
                     padding: 1rem 0;
-                    gap: 1rem;
+                    gap: 3rem;
                 }
 
                 /* ── Shared button base ── */
@@ -838,9 +838,10 @@ export class AsteriskDoorbellCard extends LitElement {
 
                 /* ── Pill (large rectangular) button ── */
                 .pill {
+                    font-size: 1rem;
                     gap: 0.5rem;
-                    padding: 0.75rem 2rem;
-                    border-radius: 2rem;
+                    padding: 1rem 3rem;
+                    border-radius: 0.5rem;
                     background: var(--card-background-color, rgba(255,255,255,0.08));
                 }
 
@@ -865,7 +866,7 @@ export class AsteriskDoorbellCard extends LitElement {
                     display: flex;
                     align-items: center;
                     justify-content: center;
-                    gap: 1rem;
+                    gap: 3rem;
                 }
 
                 /* ── Call button states ── */

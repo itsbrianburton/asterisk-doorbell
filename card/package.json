@@ -1,6 +1,6 @@
 {
 	"name": "asterisk-doorbell",
-	"version": "1.0.6",
+	"version": "1.0.7",
 	"description": "Custom card for Home Assistant to integrate with SIP Doorbells through an Asterisks server.",
 	"author": "Brian Burton",
 	"source": "src/asterisk-doorbell.ts",
