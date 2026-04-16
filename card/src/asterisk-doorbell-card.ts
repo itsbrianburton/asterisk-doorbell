@@ -728,13 +728,7 @@ export class AsteriskDoorbellCard extends LitElement {
                     ` : html`
                         <!-- Small theme: all circular buttons in a row -->
                         <div class="circle-row">
-                            <button
-                                class="${callBtnClass} circle-btn"
-                                ?disabled=${callBtnDisabled}
-                                @click=${callBtnHandler}
-                            >
-                                <ha-icon icon="${callBtnIcon}"></ha-icon>
-                            </button>
+                            
 
                             <button
                                 class="circle-btn ${this._isMuted ? 'toggled' : ''}"
@@ -742,6 +736,14 @@ export class AsteriskDoorbellCard extends LitElement {
                                 @click=${() => this._handleMute()}
                             >
                                 <ha-icon icon="${this._isMuted ? 'mdi:microphone-off' : 'mdi:microphone'}"></ha-icon>
+                            </button>
+                            
+                            <button
+                                class="${callBtnClass} circle-btn circle-btn-lg"
+                                ?disabled=${callBtnDisabled}
+                                @click=${callBtnHandler}
+                            >
+                                <ha-icon icon="${callBtnIcon}"></ha-icon>
                             </button>
 
                             <button
@@ -860,6 +862,11 @@ export class AsteriskDoorbellCard extends LitElement {
 
                 .circle-btn ha-icon {
                     --mdc-icon-size: 22px;
+                }
+                
+                .circle-btn-lg {
+                    width: 74px;
+                    height: 74px;
                 }
 
                 .circle-row {
