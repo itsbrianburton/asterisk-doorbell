@@ -169,19 +169,38 @@ console.info(
     '\nasterisk_debug.hangupAll() - Hang up all active calls'
 );
 
-// Register the custom card
-try {
-    if (!customElements.get("asterisk-doorbell-card")) {
-        customElements.define("asterisk-doorbell-card", AsteriskDoorbellCard);
+function registerElements() {
+    try {
+        if (!customElements.get("asterisk-doorbell-card")) {
+            customElements.define("asterisk-doorbell-card", AsteriskDoorbellCard);
+        }
+    } catch (e) {
+        // Another copy of the class may already hold this name in the active
+        // registry; nothing we can do from here, and not fatal.
     }
-} catch (e) {
-    console.error("[ASTERISK_DOORBELL] Failed to register custom element:", e);
+    try {
+        if (!customElements.get("asterisk-doorbell-editor")) {
+            customElements.define("asterisk-doorbell-editor", AsteriskDoorbellEditor);
+        }
+    } catch (e) { /* same */ }
 }
 
-// Register the editor
-if (!customElements.get("asterisk-doorbell-editor")) {
-    customElements.define("asterisk-doorbell-editor", AsteriskDoorbellEditor);
-}
+// Register now, in whatever registry is currently live.
+registerElements();
+
+// Watch for a registry swap (e.g. @webcomponents/scoped-custom-element-registry
+// being installed later by another card's bundle) and re-register into the new one.
+let activeRegistry: CustomElementRegistry = window.customElements;
+const swapWatcher = setInterval(() => {
+    if (window.customElements !== activeRegistry) {
+        console.info("[ASTERISK_DOORBELL] customElements registry changed; re-registering");
+        activeRegistry = window.customElements;
+        registerElements();
+    }
+}, 250);
+
+// Stop polling after 30s — by then every card on the page has loaded.
+setTimeout(() => clearInterval(swapWatcher), 30_000);
 
 // Add to customCards array for the UI
 window.customCards = window.customCards || [];
