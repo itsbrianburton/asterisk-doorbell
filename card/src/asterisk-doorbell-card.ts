@@ -328,7 +328,17 @@ export class AsteriskDoorbellCard extends LitElement {
             .on('accepted', () => {
                 this._log("WebRTC session accepted - audio/video connected");
                 this._hasPendingIncomingCall = false;
+                this._isConnecting = false;
                 this.requestUpdate();
+            })
+            .on('confirmed', () => {
+                this._log("WebRTC session confirmed (ACK exchanged)");
+                // Belt-and-suspenders: ensure connecting flag is cleared even if
+                // the accepted handler was missed or fired before the flag was set.
+                if (this._isConnecting) {
+                    this._isConnecting = false;
+                    this.requestUpdate();
+                }
             })
             .on('ended', () => {
                 this._log("WebRTC session ended");
@@ -664,7 +674,11 @@ export class AsteriskDoorbellCard extends LitElement {
 
         const isThisCardActive = globalCallRegistry.isActiveCard(this._cardId);
         const shouldShowRinging = this._callState === 'ringing' || this._hasPendingIncomingCall;
-        const isInCall = this._callState === 'active' && isThisCardActive && this._session;
+        // The card is "in call" when the HA entity says active OR when we have
+        // an established SIP session on this card (covers the race where the HA
+        // entity transitions while the UI was still in the connecting state).
+        const hasActiveSIPSession = isThisCardActive && !!this._session && !this._hasPendingIncomingCall && !this._isConnecting;
+        const isInCall = (this._callState === 'active' && isThisCardActive && this._session) || hasActiveSIPSession;
         const isLarge = this._config.theme !== 'small';
         const sipStatus = this._getSIPStatus();
 
