@@ -1,19 +1,18 @@
 // @ts-ignore
 import { version } from '../package.json';
-import { AsteriskDoorbellCard } from "./asterisk-doorbell-card";
-import { AsteriskDoorbellEditor } from "./asterisk-doorbell-editor";
+import { AsteriskDoorbellCard } from './asterisk-doorbell-card';
+import { AsteriskDoorbellEditor } from './asterisk-doorbell-editor';
+import { SIPManager } from './sip-manager';
 
-// Declare global types
 declare global {
     interface Window {
         customCards: Array<Object>;
     }
 }
 
-// Helper function to find card instances
 function findDoorbellCards(): AsteriskDoorbellCard[] {
     const cards: AsteriskDoorbellCard[] = [];
-    document.querySelectorAll('asterisk-doorbell-card').forEach(element => {
+    document.querySelectorAll('asterisk-doorbell-card').forEach((element) => {
         if (element instanceof AsteriskDoorbellCard) {
             cards.push(element);
         }
@@ -21,8 +20,19 @@ function findDoorbellCards(): AsteriskDoorbellCard[] {
     return cards;
 }
 
-// Add debugging helpers to window for console access
+// Debug helpers now also expose the SIPManager singleton
 (window as any).asterisk_debug = {
+    getManager: () => SIPManager.getInstance(),
+
+    getManagerStatus: () => {
+        const mgr = SIPManager.getInstance();
+        return {
+            status: mgr.status,
+            isReady: mgr.isReady,
+            hasActiveSession: mgr.hasActiveSession,
+        };
+    },
+
     getCards: () => {
         const cards = findDoorbellCards();
         console.log(`Found ${cards.length} doorbell card(s)`);
@@ -35,11 +45,10 @@ function findDoorbellCards(): AsteriskDoorbellCard[] {
             console.warn('No doorbell cards found');
             return 'no_cards';
         }
-
         return cards.map((card, index) => ({
             cardIndex: index,
             status: card.getSIPStatus(),
-            diagnostics: card.getDiagnosticInfo()
+            diagnostics: card.getDiagnosticInfo(),
         }));
     },
 
@@ -49,10 +58,9 @@ function findDoorbellCards(): AsteriskDoorbellCard[] {
             console.warn('No doorbell cards found');
             return {};
         }
-
         return cards.map((card, index) => ({
             cardIndex: index,
-            ...card.getDiagnosticInfo()
+            ...card.getDiagnosticInfo(),
         }));
     },
 
@@ -62,95 +70,41 @@ function findDoorbellCards(): AsteriskDoorbellCard[] {
             console.warn('No doorbell cards found');
             return false;
         }
-
         return cards.map((card, index) => ({
             cardIndex: index,
-            ready: card.isReady()
+            ready: card.isReady(),
         }));
     },
 
     reinitialize: async () => {
+        const mgr = SIPManager.getInstance();
+        console.log('Destroying and reinitializing SIPManager...');
+        mgr.destroy();
+
         const cards = findDoorbellCards();
         if (cards.length === 0) {
-            console.warn('No doorbell cards found');
+            console.warn('No doorbell cards found to trigger reinit');
             return false;
         }
 
-        console.log(`Reinitializing ${cards.length} doorbell card(s)...`);
-
-        const results = await Promise.all(
-            cards.map(async (card, index) => {
-                try {
-                    const success = await card.manualInitialize();
-                    console.log(`Card ${index}: Reinitialization ${success ? 'successful' : 'failed'}`);
-                    return { cardIndex: index, success };
-                } catch (e) {
-                    console.error(`Card ${index}: Reinitialization failed:`, e);
-                    return { cardIndex: index, success: false, error: e };
-                }
-            })
-        );
-
-        return results;
+        // Use the first card's hass to reinitialize
+        try {
+            const success = await cards[0].manualInitialize();
+            console.log(`Reinitialization ${success ? 'successful' : 'failed'}`);
+            return success;
+        } catch (e) {
+            console.error('Reinitialization failed:', e);
+            return false;
+        }
     },
 
-    testCall: async (cardIndex: number = 0) => {
-        const cards = findDoorbellCards();
-        if (cards.length === 0) {
-            console.warn('No doorbell cards found');
-            return false;
-        }
-
-        if (cardIndex >= cards.length) {
-            console.error(`Card index ${cardIndex} not found. Available cards: 0-${cards.length - 1}`);
-            return false;
-        }
-
-        const card = cards[cardIndex];
-        const diagnostics = card.getDiagnosticInfo();
-
-        if (!diagnostics.confbridgeId) {
-            console.error('No confbridge ID available for test call');
-            return false;
-        }
-
-        console.log(`Testing call on card ${cardIndex} with confbridge: ${diagnostics.confbridgeId}`);
-        return await (card as any)._handleAnswer();
+    hangup: () => {
+        const mgr = SIPManager.getInstance();
+        mgr.hangup();
+        console.log('Hangup requested');
     },
-
-    hangupAll: async () => {
-        const cards = findDoorbellCards();
-        if (cards.length === 0) {
-            console.warn('No doorbell cards found');
-            return false;
-        }
-
-        console.log(`Hanging up all active calls on ${cards.length} card(s)...`);
-
-        const results = await Promise.all(
-            cards.map(async (card, index) => {
-                try {
-                    const diagnostics = card.getDiagnosticInfo();
-                    if (diagnostics.sessionExists) {
-                        await (card as any)._handleHangup();
-                        console.log(`Card ${index}: Hangup successful`);
-                        return { cardIndex: index, success: true };
-                    } else {
-                        console.log(`Card ${index}: No active session to hang up`);
-                        return { cardIndex: index, success: true, note: 'no_active_session' };
-                    }
-                } catch (e) {
-                    console.error(`Card ${index}: Hangup failed:`, e);
-                    return { cardIndex: index, success: false, error: e };
-                }
-            })
-        );
-
-        return results;
-    }
 };
 
-// Log version information and debugging info
 console.info(
     `%c Asterisk Doorbell %c ${version} `,
     'color: white; background: #3498db; font-weight: 700;',
@@ -160,52 +114,44 @@ console.info(
 console.info(
     '%c🔧 Debug Commands Available:',
     'color: #ff6b35; font-weight: bold;',
+    '\nasterisk_debug.getManagerStatus() - SIPManager singleton status' +
     '\nasterisk_debug.getCards() - Find all doorbell card instances' +
-    '\nasterisk_debug.getStatus() - Get connection status for all cards' +
-    '\nasterisk_debug.getDiagnostics() - Get detailed diagnostics for all cards' +
-    '\nasterisk_debug.isReady() - Check if cards are ready to make calls' +
-    '\nasterisk_debug.reinitialize() - Manually reinitialize SIP clients' +
-    '\nasterisk_debug.testCall(cardIndex) - Test call on specific card' +
-    '\nasterisk_debug.hangupAll() - Hang up all active calls'
+    '\nasterisk_debug.getStatus() - Get status for all cards' +
+    '\nasterisk_debug.getDiagnostics() - Detailed diagnostics' +
+    '\nasterisk_debug.isReady() - Check if cards are ready' +
+    '\nasterisk_debug.reinitialize() - Destroy and recreate SIP connection' +
+    '\nasterisk_debug.hangup() - Hang up active call',
 );
 
 function registerElements() {
     try {
-        if (!customElements.get("asterisk-doorbell-card")) {
-            customElements.define("asterisk-doorbell-card", AsteriskDoorbellCard);
+        if (!customElements.get('asterisk-doorbell-card')) {
+            customElements.define('asterisk-doorbell-card', AsteriskDoorbellCard);
         }
-    } catch (e) {
-        // Another copy of the class may already hold this name in the active
-        // registry; nothing we can do from here, and not fatal.
-    }
+    } catch (e) {}
     try {
-        if (!customElements.get("asterisk-doorbell-editor")) {
-            customElements.define("asterisk-doorbell-editor", AsteriskDoorbellEditor);
+        if (!customElements.get('asterisk-doorbell-editor')) {
+            customElements.define('asterisk-doorbell-editor', AsteriskDoorbellEditor);
         }
-    } catch (e) { /* same */ }
+    } catch (e) {}
 }
 
-// Register now, in whatever registry is currently live.
 registerElements();
 
-// Watch for a registry swap (e.g. @webcomponents/scoped-custom-element-registry
-// being installed later by another card's bundle) and re-register into the new one.
 let activeRegistry: CustomElementRegistry = window.customElements;
 const swapWatcher = setInterval(() => {
     if (window.customElements !== activeRegistry) {
-        console.info("[ASTERISK_DOORBELL] customElements registry changed; re-registering");
+        console.info('[ASTERISK_DOORBELL] customElements registry changed; re-registering');
         activeRegistry = window.customElements;
         registerElements();
     }
 }, 250);
 
-// Stop polling after 30s — by then every card on the page has loaded.
 setTimeout(() => clearInterval(swapWatcher), 30_000);
 
-// Add to customCards array for the UI
 window.customCards = window.customCards || [];
 window.customCards.push({
-    type: "asterisk-doorbell-card",
-    name: "Asterisk Doorbell Card",
-    description: "Card designed to integrate with video doorbells through an Asterisk server using three global sensors."
+    type: 'asterisk-doorbell-card',
+    name: 'Asterisk Doorbell Card',
+    description: 'Card designed to integrate with video doorbells through an Asterisk server using three global sensors.',
 });
