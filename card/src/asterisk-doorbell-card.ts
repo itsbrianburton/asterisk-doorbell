@@ -114,6 +114,33 @@ export class AsteriskDoorbellCard extends LitElement {
         this._initializeSIPWhenReady();
     }
 
+    disconnectedCallback() {
+        super.disconnectedCallback();
+        this._destroySIP();
+
+        // Cancel any pending retry
+        if (this._retryTimeout) {
+            clearTimeout(this._retryTimeout);
+            this._retryTimeout = null;
+        }
+    }
+
+    private _destroySIP() {
+        if (this._session) {
+            try { this._session.terminate(); } catch (_) {}
+            this._session = null;
+        }
+        if (this._socket) {
+            try {
+                this._socket.unregister({ all: true });
+                this._socket.stop();
+            } catch (_) {}
+            this._socket = null;
+        }
+        this._cleanupSession();
+        this._initializationAttempted = false;
+    }
+
     private async _initializeSIPWhenReady() {
         await this.updateComplete;
         await new Promise(resolve => setTimeout(resolve, 2000));
@@ -124,11 +151,17 @@ export class AsteriskDoorbellCard extends LitElement {
         } catch (e) {
             this._log("SIP initialization failed: " + e, "error");
             this._log("Will retry in 10 seconds", "error");
-            setTimeout(() => this._initializeSIPWhenReady(), 10000);
+            this._retryTimeout = setTimeout(() => {
+                this._retryTimeout = null;
+                this._initializeSIPWhenReady();
+            }, 10000);
         }
     }
 
     private async _initializeSIP() {
+        this._destroySIP();
+        this._initializationAttempted = true;
+
         if (this._initializationAttempted) {
             this._log("SIP initialization already attempted, resetting...");
             this._socket = null;
