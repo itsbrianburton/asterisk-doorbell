@@ -33,6 +33,13 @@ export class SIPManager {
     private _retryTimeout: ReturnType<typeof setTimeout> | null = null;
     private _initPromise: Promise<void> | null = null;
     private _destroyed: boolean = false;
+    private _hass: any = null;
+    private _heartbeatInterval: ReturnType<typeof setInterval> | null = null;
+
+    // How often the heartbeat checks the connection (ms)
+    private static readonly HEARTBEAT_MS = 30_000;
+    // How long to wait before retrying after a disconnect (ms)
+    private static readonly RETRY_MS = 15_000;
 
     // ── Singleton access ──────────────────────────────────────────────────
 
@@ -48,7 +55,16 @@ export class SIPManager {
         this._log('SIPManager singleton created');
     }
 
-    // ── Public API for cards ──────────────────────────────────────────────
+    // ── Public API ────────────────────────────────────────────────────────
+
+    /**
+     * Keep the hass reference current. Cards should call this from
+     * their `updated()` lifecycle so the manager always has a fresh
+     * reference for WS calls and reconnects.
+     */
+    setHass(hass: any) {
+        this._hass = hass;
+    }
 
     /**
      * Subscribe to manager events. Returns an unsubscribe function.
@@ -63,8 +79,16 @@ export class SIPManager {
     /**
      * Initialize the SIP connection. Safe to call multiple times —
      * subsequent calls are no-ops if already initialized or in progress.
+     * Optionally accepts a hass reference; if omitted, uses the stored one.
      */
-    async initialize(hass: any, settings?: SIPManagerSettings): Promise<void> {
+    async initialize(hass?: any, settings?: SIPManagerSettings): Promise<void> {
+        if (hass) this._hass = hass;
+
+        if (!this._hass) {
+            this._log('No hass reference available, cannot initialize', 'error');
+            throw new Error('No hass reference');
+        }
+
         // If already running and registered, nothing to do
         if (this._ua && this._status === 'registered') {
             this._log('Already registered, skipping init');
@@ -77,7 +101,7 @@ export class SIPManager {
             return this._initPromise;
         }
 
-        this._initPromise = this._doInitialize(hass, settings);
+        this._initPromise = this._doInitialize(settings);
         try {
             await this._initPromise;
         } finally {
@@ -162,6 +186,7 @@ export class SIPManager {
     destroy(): void {
         this._destroyed = true;
         this._cancelRetry();
+        this._stopHeartbeat();
         this._destroyUA();
         this._setStatus('not_initialized');
         this._log('SIPManager destroyed');
@@ -176,7 +201,7 @@ export class SIPManager {
 
     // ── Internal ──────────────────────────────────────────────────────────
 
-    private async _doInitialize(hass: any, settingsOverride?: SIPManagerSettings): Promise<void> {
+    private async _doInitialize(settingsOverride?: SIPManagerSettings): Promise<void> {
         this._destroyed = false;
         this._cancelRetry();
 
@@ -184,7 +209,7 @@ export class SIPManager {
         if (settingsOverride) {
             this._settings = settingsOverride;
         } else if (!this._settings) {
-            this._settings = await this._fetchSettings(hass);
+            this._settings = await this._fetchSettings();
         }
 
         if (!this._settings.asterisk_host || !this._settings.websocket_port) {
@@ -226,7 +251,7 @@ export class SIPManager {
                 .on('registrationFailed', (e) => {
                     this._log('SIP registration failed: ' + JSON.stringify(e), 'error');
                     this._setStatus('not_registered');
-                    this._scheduleRetry(hass);
+                    this._scheduleRetry();
                 })
                 .on('connected', () => {
                     this._log('WebSocket connected');
@@ -234,27 +259,28 @@ export class SIPManager {
                 .on('disconnected', () => {
                     this._log('WebSocket disconnected', 'warning');
                     this._setStatus('disconnected');
-                    this._scheduleRetry(hass);
+                    this._scheduleRetry();
                 })
                 .on('newRTCSession', (event: RTCSessionEvent) => {
                     this._handleNewRTCSession(event);
                 });
 
             this._ua.start();
-            this._log('UA started');
+            this._startHeartbeat();
+            this._log('UA started, heartbeat active');
 
         } catch (error) {
             this._log('Error creating UA: ' + error, 'error');
             this._ua = null;
             this._setStatus('not_initialized');
-            this._scheduleRetry(hass);
+            this._scheduleRetry();
             throw error;
         }
     }
 
-    private async _fetchSettings(hass: any): Promise<SIPManagerSettings> {
+    private async _fetchSettings(): Promise<SIPManagerSettings> {
         try {
-            const settings = await hass.callWS({ type: 'asterisk_doorbell/get_settings' });
+            const settings = await this._hass.callWS({ type: 'asterisk_doorbell/get_settings' });
             if (settings?.asterisk_host && settings?.websocket_port) {
                 return settings;
             }
@@ -320,21 +346,76 @@ export class SIPManager {
         }
     }
 
-    private _scheduleRetry(hass: any) {
+    private _scheduleRetry() {
         if (this._destroyed) return;
         this._cancelRetry();
-        this._log('Will retry connection in 15 seconds');
+        this._log(`Will retry connection in ${SIPManager.RETRY_MS / 1000} seconds`);
         this._retryTimeout = setTimeout(() => {
             this._retryTimeout = null;
             this._initPromise = null; // Allow a fresh init
-            this.initialize(hass).catch(() => {});
-        }, 15000);
+            this.initialize().catch(() => {});
+        }, SIPManager.RETRY_MS);
     }
 
     private _cancelRetry() {
         if (this._retryTimeout) {
             clearTimeout(this._retryTimeout);
             this._retryTimeout = null;
+        }
+    }
+
+    // ── Heartbeat ─────────────────────────────────────────────────────────
+    // Runs every HEARTBEAT_MS while the manager is active.
+    // If the UA has silently died (WebSocket dropped without a
+    // 'disconnected' event, or registration lapsed), tear it down
+    // and reconnect.
+
+    private _startHeartbeat() {
+        this._stopHeartbeat();
+        this._heartbeatInterval = setInterval(() => this._heartbeat(), SIPManager.HEARTBEAT_MS);
+    }
+
+    private _stopHeartbeat() {
+        if (this._heartbeatInterval) {
+            clearInterval(this._heartbeatInterval);
+            this._heartbeatInterval = null;
+        }
+    }
+
+    private _heartbeat() {
+        if (this._destroyed) {
+            this._stopHeartbeat();
+            return;
+        }
+
+        // No UA at all — something went very wrong, reconnect
+        if (!this._ua) {
+            this._log('Heartbeat: no UA, triggering reconnect', 'warning');
+            this._scheduleRetry();
+            return;
+        }
+
+        // UA exists but is not registered — jssip's own re-register
+        // timer should handle this, but if the status has been stuck
+        // on 'disconnected' or 'not_registered' for a full heartbeat
+        // cycle, force a fresh connection.
+        if (this._status === 'disconnected' || this._status === 'not_registered') {
+            // Only intervene if there isn't already a retry scheduled
+            if (!this._retryTimeout && !this._initPromise) {
+                this._log('Heartbeat: stuck in ' + this._status + ', forcing reconnect', 'warning');
+                this._scheduleRetry();
+            }
+            return;
+        }
+
+        // UA thinks it's registered — verify by checking isRegistered()
+        if (!this._ua.isRegistered()) {
+            this._log('Heartbeat: UA reports unregistered, triggering re-register', 'warning');
+            try {
+                this._ua.register();
+            } catch (_) {
+                this._scheduleRetry();
+            }
         }
     }
 

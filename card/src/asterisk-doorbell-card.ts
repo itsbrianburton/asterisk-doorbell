@@ -77,10 +77,13 @@ export class AsteriskDoorbellCard extends LitElement {
         // Create media elements for this card instance
         this._initializeMediaElements();
 
-        // Kick off initialization if the manager hasn't started yet.
-        // This is idempotent — if another card (or a previous mount of this
-        // card) already initialized, this returns immediately.
-        this._tryInitManager();
+        // Feed current hass to the manager (keeps its reference fresh).
+        // The manager was already initialized at script load time;
+        // this just ensures it has the latest hass if the card mounts
+        // after a reconnect or if the bootstrap hadn't found hass yet.
+        if (this.hass) {
+            this._manager.setHass(this.hass);
+        }
     }
 
     disconnectedCallback() {
@@ -102,19 +105,6 @@ export class AsteriskDoorbellCard extends LitElement {
             this._activeSession = null;
         }
         this._pendingIncomingSession = null;
-    }
-
-    private async _tryInitManager() {
-        // Wait for hass to be available (it may not be set yet on first connectedCallback)
-        if (!this.hass) {
-            await this.updateComplete;
-            await new Promise((r) => setTimeout(r, 1000));
-        }
-        if (this.hass) {
-            this._manager.initialize(this.hass).catch((e) => {
-                this._log('Manager initialization failed: ' + e, 'error');
-            });
-        }
     }
 
     // ── Manager event handler ─────────────────────────────────────────────
@@ -265,7 +255,7 @@ export class AsteriskDoorbellCard extends LitElement {
         try {
             if (!this._manager.isReady) {
                 this._log('Manager not ready, attempting init...', 'warning');
-                await this._manager.initialize(this.hass);
+                await this._manager.initialize();
                 if (!this._manager.isReady) {
                     throw new Error('Manager still not ready after init');
                 }
@@ -392,7 +382,18 @@ export class AsteriskDoorbellCard extends LitElement {
     updated(changedProps: any) {
         const previousCallState = changedProps.get('_callState');
 
-        if (changedProps.has('hass') && this._config) {
+        if (changedProps.has('hass') && this.hass) {
+            // Always keep the manager's hass reference current
+            this._manager.setHass(this.hass);
+
+            // If the manager never initialized (bootstrap couldn't find
+            // hass in time), kick it off now as a fallback
+            if (this._manager.status === 'not_initialized') {
+                this._manager.initialize(this.hass).catch((e) => {
+                    this._log('Fallback manager init failed: ' + e, 'error');
+                });
+            }
+
             this._updateState();
         }
 
@@ -500,7 +501,8 @@ export class AsteriskDoorbellCard extends LitElement {
 
     public async manualInitialize(): Promise<boolean> {
         try {
-            await this._manager.initialize(this.hass);
+            this._manager.setHass(this.hass);
+            await this._manager.initialize();
             return true;
         } catch (e) {
             this._log('Manual initialization failed: ' + e, 'error');
